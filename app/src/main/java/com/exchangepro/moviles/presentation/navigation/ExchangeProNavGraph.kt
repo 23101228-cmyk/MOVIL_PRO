@@ -7,6 +7,7 @@ import androidx.navigation.compose.rememberNavController
 import com.exchangepro.moviles.presentation.auth.LoginScreen
 import com.exchangepro.moviles.presentation.auth.RegisterScreen
 import com.exchangepro.moviles.presentation.placeholder.PendingScreen
+import com.exchangepro.moviles.presentation.wallet.WalletScreen
 
 @Composable
 fun ExchangeProNavGraph() {
@@ -28,7 +29,7 @@ fun ExchangeProNavGraph() {
             ExchangeScaffold(navController, "Mis ofertas") { PendingScreen("Mis ofertas", "Integrante 3") }
         }
         composable(Route.Wallet.value) {
-            ExchangeScaffold(navController, "Wallet") { PendingScreen("Wallet", "Integrante 2") }
+            ExchangeScaffold(navController, "Wallet") { WalletScreen() }
         }
         composable(Route.Transactions.value) {
             ExchangeScaffold(navController, "Transacciones") { PendingScreen("Transacciones", "Integrante 4") }
