@@ -6,11 +6,13 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.exchangepro.moviles.presentation.auth.LoginScreen
 import com.exchangepro.moviles.presentation.auth.RegisterScreen
+import com.exchangepro.moviles.presentation.home.HomeScreen
 import com.exchangepro.moviles.presentation.offers.CreateOfferScreen
 import com.exchangepro.moviles.presentation.offers.MyOffersScreen
 import com.exchangepro.moviles.presentation.offers.OffersScreen
 import com.exchangepro.moviles.presentation.payment.PaymentDataScreen
 import com.exchangepro.moviles.presentation.placeholder.PendingScreen
+import com.exchangepro.moviles.presentation.transactions.TransactionsScreen
 import com.exchangepro.moviles.presentation.wallet.WalletScreen
 
 @Composable
@@ -21,7 +23,7 @@ fun ExchangeProNavGraph() {
         composable(Route.Login.value) { LoginScreen(navController) }
         composable(Route.Register.value) { RegisterScreen(navController) }
         composable(Route.Home.value) {
-            ExchangeScaffold(navController, "Inicio") { PendingScreen("Inicio", "Integrante 4") }
+            ExchangeScaffold(navController, "Inicio") { HomeScreen(navController) }
         }
         composable(Route.Offers.value) {
             ExchangeScaffold(navController, "Ofertas") { OffersScreen(navController) }
@@ -36,7 +38,7 @@ fun ExchangeProNavGraph() {
             ExchangeScaffold(navController, "Wallet") { WalletScreen() }
         }
         composable(Route.Transactions.value) {
-            ExchangeScaffold(navController, "Transacciones") { PendingScreen("Transacciones", "Integrante 4") }
+            ExchangeScaffold(navController, "Transacciones") { TransactionsScreen() }
         }
         composable(Route.PaymentData.value) {
             ExchangeScaffold(navController, "Datos de pago") { PaymentDataScreen() }
