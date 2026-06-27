@@ -1,0 +1,420 @@
+package com.exchangepro.moviles.data.repository
+
+import com.exchangepro.moviles.data.firebase.FirebaseCollections
+import com.exchangepro.moviles.domain.model.CurrencyCode
+import com.exchangepro.moviles.domain.model.OfferStatus
+import com.exchangepro.moviles.domain.model.OperationType
+import com.exchangepro.moviles.domain.model.Transaction
+import com.exchangepro.moviles.domain.model.TransactionStatus
+import com.google.android.gms.tasks.Task
+import com.google.firebase.Timestamp
+import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.DocumentSnapshot
+import com.google.firebase.firestore.FieldValue
+import com.google.firebase.firestore.FirebaseFirestore
+import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.Calendar
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
+
+class FirebaseTransactionRepository(
+    private val authProvider: () -> FirebaseAuth = { FirebaseAuth.getInstance() },
+    private val dbProvider: () -> FirebaseFirestore = { FirebaseFirestore.getInstance() }
+) {
+    fun currentUserId(): String =
+        authProvider().currentUser?.uid ?: error("No hay una sesion activa.")
+
+    suspend fun createFromOffer(
+        offerId: String,
+        amount: Double,
+        paymentMethod: String
+    ): Transaction {
+        val db = dbProvider()
+        val takerId = currentUserId()
+        val offerRef = db.collection(FirebaseCollections.OFFERS).document(offerId)
+        val takerRef = db.collection(FirebaseCollections.USERS).document(takerId)
+        val transactionRef = db.collection(FirebaseCollections.TRANSACTIONS).document()
+        var created: Transaction? = null
+
+        db.runTransaction { firestoreTransaction ->
+            val offer = firestoreTransaction.get(offerRef)
+            val taker = firestoreTransaction.get(takerRef)
+
+            require(offer.exists()) { "La oferta ya no existe." }
+            require(offer.getString("status") == OfferStatus.ACTIVA.name) { "La oferta ya no esta activa." }
+
+            val ownerId = offer.getString("userId").orEmpty()
+            require(ownerId.isNotBlank() && ownerId != takerId) { "No puedes tomar tu propia oferta." }
+
+            val ownerName = offer.getString("userName").orEmpty()
+            val takerName = taker.getString("fullName").orEmpty()
+            require(takerName.isNotBlank()) { "Tu perfil no tiene un nombre valido." }
+
+            val operationType = offer.enumValue<OperationType>("operationType")
+                ?: throw IllegalStateException("La oferta tiene un tipo invalido.")
+            val fromCurrency = offer.enumValue<CurrencyCode>("fromCurrency")
+                ?: throw IllegalStateException("La oferta tiene una moneda invalida.")
+            val toCurrency = offer.enumValue<CurrencyCode>("toCurrency")
+                ?: throw IllegalStateException("La oferta tiene una moneda destino invalida.")
+            val exchangeRate = offer.getDouble("exchangeRate") ?: 0.0
+            val availableAmount = offer.getDouble("offeredAmount") ?: 0.0
+            val minimumAmount = offer.getDouble("minimumAmount") ?: 0.0
+            val offerHeldAmount = offer.getDouble("heldAmount") ?: 0.0
+            val heldCurrency = offer.enumValue<CurrencyCode>("heldCurrency")
+                ?: throw IllegalStateException("La oferta no tiene una moneda retenida valida.")
+
+            require(amount >= minimumAmount && amount <= availableAmount) {
+                "El monto debe estar entre %.2f y %.2f.".format(minimumAmount, availableAmount)
+            }
+            require(exchangeRate > 0.0) { "La tasa de la oferta no es valida." }
+
+            val transactionHeldAmount = if (operationType == OperationType.COMPRA) {
+                amount * exchangeRate
+            } else {
+                amount
+            }
+            require(offerHeldAmount + 0.0001 >= transactionHeldAmount) {
+                "La oferta no tiene fondos retenidos suficientes."
+            }
+
+            val buyerId: String
+            val buyerName: String
+            val sellerId: String
+            val sellerName: String
+            if (operationType == OperationType.COMPRA) {
+                buyerId = ownerId
+                buyerName = ownerName
+                sellerId = takerId
+                sellerName = takerName
+            } else {
+                buyerId = takerId
+                buyerName = takerName
+                sellerId = ownerId
+                sellerName = ownerName
+            }
+
+            val remainingAmount = (availableAmount - amount).coerceAtLeast(0.0)
+            require(remainingAmount <= 0.0001 || remainingAmount >= minimumAmount) {
+                "El monto dejaria un remanente menor al minimo. Toma la oferta completa o reduce el monto."
+            }
+            val remainingHeld = (offerHeldAmount - transactionHeldAmount).coerceAtLeast(0.0)
+            val code = "EX-${Calendar.getInstance().get(Calendar.YEAR)}-${transactionRef.id.take(6).uppercase()}"
+            val fundsRecipientId = if (ownerId == buyerId) sellerId else buyerId
+
+            created = Transaction(
+                id = transactionRef.id,
+                code = code,
+                offerId = offerId,
+                buyerId = buyerId,
+                buyerName = buyerName,
+                sellerId = sellerId,
+                sellerName = sellerName,
+                paymentMethod = paymentMethod,
+                operationAmount = amount,
+                totalToPay = amount * exchangeRate,
+                currency = fromCurrency,
+                status = TransactionStatus.PENDIENTE_PAGO,
+                toCurrency = toCurrency,
+                fundsOwnerId = ownerId,
+                fundsRecipientId = fundsRecipientId,
+                heldCurrency = heldCurrency,
+                heldAmount = transactionHeldAmount
+            )
+
+            firestoreTransaction.update(
+                offerRef,
+                mapOf(
+                    "offeredAmount" to remainingAmount,
+                    "heldAmount" to remainingHeld,
+                    "status" to if (remainingAmount <= 0.0001) OfferStatus.COMPLETADA.name else OfferStatus.ACTIVA.name,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            firestoreTransaction.set(
+                transactionRef,
+                mapOf(
+                    "code" to code,
+                    "offerId" to offerId,
+                    "offerOperationType" to operationType.name,
+                    "buyerId" to buyerId,
+                    "buyerName" to buyerName,
+                    "sellerId" to sellerId,
+                    "sellerName" to sellerName,
+                    "paymentMethod" to paymentMethod,
+                    "operationAmount" to amount,
+                    "totalToPay" to amount * exchangeRate,
+                    "fromCurrency" to fromCurrency.name,
+                    "toCurrency" to toCurrency.name,
+                    "status" to TransactionStatus.PENDIENTE_PAGO.name,
+                    "voucherUrl" to null,
+                    "fundsOwnerId" to ownerId,
+                    "fundsRecipientId" to fundsRecipientId,
+                    "heldCurrency" to heldCurrency.name,
+                    "heldAmount" to transactionHeldAmount,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+            )
+            null
+        }.awaitTransaction()
+
+        return created ?: error("No se pudo crear la transaccion.")
+    }
+
+    suspend fun getMyTransactions(): List<Transaction> {
+        val db = dbProvider()
+        val uid = currentUserId()
+        val buyerDocuments = db.collection(FirebaseCollections.TRANSACTIONS)
+            .whereEqualTo("buyerId", uid)
+            .get()
+            .awaitTransaction()
+            .documents
+        val sellerDocuments = db.collection(FirebaseCollections.TRANSACTIONS)
+            .whereEqualTo("sellerId", uid)
+            .get()
+            .awaitTransaction()
+            .documents
+
+        return (buyerDocuments + sellerDocuments)
+            .distinctBy { it.id }
+            .sortedByDescending { it.createdAtMillis() }
+            .mapNotNull { it.toTransaction() }
+    }
+
+    suspend fun markPaymentSent(transactionId: String) {
+        updateStatus(
+            transactionId = transactionId,
+            expected = TransactionStatus.PENDIENTE_PAGO,
+            next = TransactionStatus.PAGADO,
+            allowedUser = { it.getString("fundsRecipientId") },
+            timestampField = "paidAt"
+        )
+    }
+
+    suspend fun openDispute(transactionId: String) {
+        val db = dbProvider()
+        val uid = currentUserId()
+        val ref = db.collection(FirebaseCollections.TRANSACTIONS).document(transactionId)
+        db.runTransaction { transaction ->
+            val snapshot = transaction.get(ref)
+            require(snapshot.exists()) { "La transaccion ya no existe." }
+            require(uid == snapshot.getString("buyerId") || uid == snapshot.getString("sellerId")) {
+                "No perteneces a esta transaccion."
+            }
+            val status = snapshot.enumValue<TransactionStatus>("status")
+            require(status == TransactionStatus.PENDIENTE_PAGO || status == TransactionStatus.PAGADO) {
+                "La transaccion ya no admite disputas."
+            }
+            transaction.update(
+                ref,
+                mapOf(
+                    "status" to TransactionStatus.EN_DISPUTA.name,
+                    "disputedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            null
+        }.awaitTransaction()
+    }
+
+    suspend fun complete(transactionId: String) {
+        val db = dbProvider()
+        val uid = currentUserId()
+        val transactionRef = db.collection(FirebaseCollections.TRANSACTIONS).document(transactionId)
+        val ownerMovementRef = db.collection(FirebaseCollections.WALLET_MOVEMENTS).document()
+        val recipientMovementRef = db.collection(FirebaseCollections.WALLET_MOVEMENTS).document()
+
+        db.runTransaction { transaction ->
+            val record = transaction.get(transactionRef)
+            require(record.exists()) { "La transaccion ya no existe." }
+            require(record.getString("fundsOwnerId") == uid) { "Solo quien retuvo los fondos puede liberarlos." }
+            require(record.getString("status") == TransactionStatus.PAGADO.name) {
+                "La transaccion debe estar pagada antes de liberar fondos."
+            }
+
+            val ownerId = record.getString("fundsOwnerId").orEmpty()
+            val recipientId = record.getString("fundsRecipientId").orEmpty()
+            val heldCurrency = record.getString("heldCurrency").orEmpty()
+            val heldAmount = record.getDouble("heldAmount") ?: 0.0
+            require(ownerId.isNotBlank() && recipientId.isNotBlank() && heldCurrency.isNotBlank() && heldAmount > 0.0) {
+                "La retencion de la transaccion es invalida."
+            }
+
+            val ownerBalanceRef = db.collection(FirebaseCollections.WALLETS)
+                .document(ownerId)
+                .collection(FirebaseCollections.BALANCES)
+                .document(heldCurrency)
+            val recipientBalanceRef = db.collection(FirebaseCollections.WALLETS)
+                .document(recipientId)
+                .collection(FirebaseCollections.BALANCES)
+                .document(heldCurrency)
+            val ownerBalance = transaction.get(ownerBalanceRef)
+            val recipientBalance = transaction.get(recipientBalanceRef)
+            val ownerRetained = ownerBalance.getDouble("retained") ?: 0.0
+            val recipientAvailable = recipientBalance.getDouble("available") ?: 0.0
+            val recipientRetained = recipientBalance.getDouble("retained") ?: 0.0
+            require(ownerRetained + 0.0001 >= heldAmount) { "El saldo retenido es insuficiente." }
+
+            transaction.set(
+                ownerBalanceRef,
+                mapOf(
+                    "currency" to heldCurrency,
+                    "available" to (ownerBalance.getDouble("available") ?: 0.0),
+                    "retained" to (ownerRetained - heldAmount).coerceAtLeast(0.0),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ),
+                SetOptions.merge()
+            )
+            transaction.set(
+                recipientBalanceRef,
+                mapOf(
+                    "currency" to heldCurrency,
+                    "available" to recipientAvailable + heldAmount,
+                    "retained" to recipientRetained,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ),
+                SetOptions.merge()
+            )
+            transaction.update(
+                transactionRef,
+                mapOf(
+                    "status" to TransactionStatus.COMPLETADO.name,
+                    "completedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            transaction.set(
+                ownerMovementRef,
+                mapOf(
+                    "userId" to ownerId,
+                    "currency" to heldCurrency,
+                    "amount" to -heldAmount,
+                    "operationType" to "INTERCAMBIO_P2P",
+                    "result" to "EXITOSO",
+                    "referenceType" to "TRANSACTION",
+                    "referenceId" to transactionId,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+            )
+            transaction.set(
+                recipientMovementRef,
+                mapOf(
+                    "userId" to recipientId,
+                    "currency" to heldCurrency,
+                    "amount" to heldAmount,
+                    "operationType" to "INTERCAMBIO_P2P",
+                    "result" to "EXITOSO",
+                    "referenceType" to "TRANSACTION",
+                    "referenceId" to transactionId,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+            )
+            null
+        }.awaitTransaction()
+    }
+
+    suspend fun cancel(transactionId: String) {
+        val db = dbProvider()
+        val uid = currentUserId()
+        val transactionRef = db.collection(FirebaseCollections.TRANSACTIONS).document(transactionId)
+
+        db.runTransaction { transaction ->
+            val record = transaction.get(transactionRef)
+            require(record.exists()) { "La transaccion ya no existe." }
+            require(uid == record.getString("buyerId") || uid == record.getString("sellerId")) {
+                "No perteneces a esta transaccion."
+            }
+            require(record.getString("status") == TransactionStatus.PENDIENTE_PAGO.name) {
+                "Solo se puede cancelar antes de confirmar el pago."
+            }
+
+            val offerRef = db.collection(FirebaseCollections.OFFERS)
+                .document(record.getString("offerId").orEmpty())
+            val offer = transaction.get(offerRef)
+            require(offer.exists()) { "No se encontro la oferta original." }
+
+            val restoredAmount = (offer.getDouble("offeredAmount") ?: 0.0) +
+                (record.getDouble("operationAmount") ?: 0.0)
+            val restoredHeld = (offer.getDouble("heldAmount") ?: 0.0) +
+                (record.getDouble("heldAmount") ?: 0.0)
+
+            transaction.update(
+                offerRef,
+                mapOf(
+                    "offeredAmount" to restoredAmount,
+                    "heldAmount" to restoredHeld,
+                    "status" to OfferStatus.ACTIVA.name,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+            transaction.update(
+                transactionRef,
+                mapOf(
+                    "status" to TransactionStatus.CANCELADO.name,
+                    "cancelledAt" to FieldValue.serverTimestamp()
+                )
+            )
+            null
+        }.awaitTransaction()
+    }
+
+    private suspend fun updateStatus(
+        transactionId: String,
+        expected: TransactionStatus,
+        next: TransactionStatus,
+        allowedUser: (DocumentSnapshot) -> String?,
+        timestampField: String
+    ) {
+        val db = dbProvider()
+        val uid = currentUserId()
+        val ref = db.collection(FirebaseCollections.TRANSACTIONS).document(transactionId)
+        db.runTransaction { transaction ->
+            val snapshot = transaction.get(ref)
+            require(snapshot.exists()) { "La transaccion ya no existe." }
+            require(allowedUser(snapshot) == uid) { "No puedes realizar esta accion." }
+            require(snapshot.getString("status") == expected.name) { "La transaccion cambio de estado." }
+            transaction.update(
+                ref,
+                mapOf(
+                    "status" to next.name,
+                    timestampField to FieldValue.serverTimestamp()
+                )
+            )
+            null
+        }.awaitTransaction()
+    }
+
+    private fun DocumentSnapshot.toTransaction(): Transaction? {
+        val fromCurrency = enumValue<CurrencyCode>("fromCurrency") ?: return null
+        return Transaction(
+            id = id,
+            code = getString("code").orEmpty(),
+            offerId = getString("offerId").orEmpty(),
+            buyerId = getString("buyerId").orEmpty(),
+            buyerName = getString("buyerName").orEmpty(),
+            sellerId = getString("sellerId").orEmpty(),
+            sellerName = getString("sellerName").orEmpty(),
+            paymentMethod = getString("paymentMethod").orEmpty(),
+            operationAmount = getDouble("operationAmount") ?: return null,
+            totalToPay = getDouble("totalToPay") ?: return null,
+            currency = fromCurrency,
+            status = enumValue<TransactionStatus>("status") ?: return null,
+            voucherUrl = getString("voucherUrl"),
+            toCurrency = enumValue<CurrencyCode>("toCurrency") ?: CurrencyCode.PEN,
+            fundsOwnerId = getString("fundsOwnerId").orEmpty(),
+            fundsRecipientId = getString("fundsRecipientId").orEmpty(),
+            heldCurrency = enumValue<CurrencyCode>("heldCurrency") ?: fromCurrency,
+            heldAmount = getDouble("heldAmount") ?: 0.0
+        )
+    }
+
+    private inline fun <reified T : Enum<T>> DocumentSnapshot.enumValue(field: String): T? =
+        getString(field)?.let { value -> enumValues<T>().firstOrNull { it.name == value } }
+
+    private fun DocumentSnapshot.createdAtMillis(): Long =
+        (get("createdAt") as? Timestamp)?.toDate()?.time ?: 0L
+}
+
+private suspend fun <T> Task<T>.awaitTransaction(): T = suspendCancellableCoroutine { continuation ->
+    addOnSuccessListener { result -> continuation.resume(result) }
+    addOnFailureListener { error -> continuation.resumeWithException(error) }
+    addOnCanceledListener { continuation.cancel() }
+}

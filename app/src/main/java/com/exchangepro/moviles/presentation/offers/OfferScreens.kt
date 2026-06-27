@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.exchangepro.moviles.data.repository.ExchangeRateRepository
 import com.exchangepro.moviles.data.repository.FirebaseOfferRepository
+import com.exchangepro.moviles.data.repository.FirebaseTransactionRepository
 import com.exchangepro.moviles.data.repository.FirebaseWalletRepository
 import com.exchangepro.moviles.domain.model.CreateOfferRequest
 import com.exchangepro.moviles.domain.model.CurrencyCode
@@ -77,6 +78,7 @@ import kotlin.math.round
 @Composable
 fun OffersScreen(navController: NavController) {
     val offerRepository = remember { FirebaseOfferRepository() }
+    val transactionRepository = remember { FirebaseTransactionRepository() }
     val scope = rememberCoroutineScope()
     val currentUserId = remember { offerRepository.currentUserId() }
     var offers by remember { mutableStateOf(emptyList<Offer>()) }
@@ -162,10 +164,25 @@ fun OffersScreen(navController: NavController) {
         TakeOfferDialog(
             offer = offer,
             onDismiss = { takingOffer = null },
+            onCreate = { amount, paymentMethod, callback ->
+                scope.launch {
+                    callback(
+                        runCatching {
+                            transactionRepository.createFromOffer(
+                                offerId = offer.id,
+                                amount = amount,
+                                paymentMethod = paymentMethod
+                            )
+                        }
+                    )
+                }
+            },
             onDone = { code ->
                 actionFailed = false
-                actionMessage = "Transaccion $code iniciada. Siguiente paso: subir comprobante en Transacciones."
+                actionMessage = "Transaccion $code iniciada. Puedes continuar desde Mis Transacciones."
                 takingOffer = null
+                scope.launch { reloadOffers() }
+                navController.navigate(Route.Transactions.value)
             }
         )
     }
@@ -700,6 +717,7 @@ private data class PaymentMethodOption(val id: Int, val label: String, val detai
 private fun TakeOfferDialog(
     offer: Offer,
     onDismiss: () -> Unit,
+    onCreate: (Double, String, (Result<com.exchangepro.moviles.domain.model.Transaction>) -> Unit) -> Unit,
     onDone: (String) -> Unit
 ) {
     var amount by remember { mutableStateOf("") }
@@ -707,11 +725,12 @@ private fun TakeOfferDialog(
     var methodMenuOpen by remember { mutableStateOf(false) }
     var submitted by remember { mutableStateOf(false) }
     var instructionsVisible by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    var createError by remember { mutableStateOf<String?>(null) }
+    var transactionCode by remember { mutableStateOf<String?>(null) }
     val methods = remember(offer) { paymentMethodsForOffer(offer) }
     val amountValue = amount.toDoubleOrNull()
     val converted = (amountValue ?: 0.0) * offer.exchangeRate
-    val transactionCode = remember(offer) { "TRX-${offer.id.takeLast(3).uppercase()}-${System.currentTimeMillis().toString().takeLast(4)}" }
-
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {},
@@ -816,15 +835,31 @@ private fun TakeOfferDialog(
                         Spacer(Modifier.width(8.dp))
                         PrimaryAction("Confirmar Operacion", {
                             submitted = true
-                            if (isValidOfferAmount(amountValue, offer) && selectedMethod != null) {
-                                instructionsVisible = true
+                            if (!saving && isValidOfferAmount(amountValue, offer) && selectedMethod != null) {
+                                saving = true
+                                createError = null
+                                onCreate(amountValue!!, selectedMethod!!.label) { result ->
+                                    saving = false
+                                    result.fold(
+                                        onSuccess = { transaction ->
+                                            transactionCode = transaction.code
+                                            instructionsVisible = true
+                                        },
+                                        onFailure = { error ->
+                                            createError = error.message ?: "No se pudo iniciar la transaccion."
+                                        }
+                                    )
+                                }
                             }
                         })
+                    }
+                    createError?.let {
+                        Text(it, color = ExchangeNegative, style = MaterialTheme.typography.bodySmall)
                     }
                 } else {
                     ExchangeCard {
                         Text("Codigo", color = ExchangeMuted, style = MaterialTheme.typography.bodySmall)
-                        Text(transactionCode, fontWeight = FontWeight.Bold)
+                        Text(transactionCode.orEmpty(), fontWeight = FontWeight.Bold)
                     }
                     DetailRow("Metodo seleccionado", selectedMethod?.label.orEmpty())
                     DetailRow("Vas a recibir", "${"%.2f".format(converted)} ${offer.toCurrency}")
@@ -832,14 +867,14 @@ private fun TakeOfferDialog(
                     DetailRow("Tasa de cambio", "%.3f".format(offer.exchangeRate))
 
                     ExchangeCard {
-                        Text("Datos del vendedor", fontWeight = FontWeight.Bold)
+                        Text("Datos de la contraparte", fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(8.dp))
                         Text(selectedMethod?.detail.orEmpty(), color = ExchangeMuted)
                         Text("Titular: ${offer.userName}", color = ExchangeMuted)
                     }
 
                     Text(
-                        "Realiza el pago exacto y luego sube tu comprobante. Este paso quedara conectado con Firebase Storage al migrar transacciones.",
+                        "La operacion ya esta registrada. Continua desde Mis Transacciones para confirmar el pago y seguir su estado.",
                         color = ExchangeMuted,
                         style = MaterialTheme.typography.bodySmall
                     )
@@ -847,7 +882,7 @@ private fun TakeOfferDialog(
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = onDismiss) { Text("Cerrar") }
                         Spacer(Modifier.width(8.dp))
-                        PrimaryAction("Subir comprobante", { onDone(transactionCode) })
+                        PrimaryAction("Ir a Transacciones", { onDone(transactionCode.orEmpty()) })
                     }
                 }
             }
@@ -876,7 +911,10 @@ private fun actionLabel(offer: Offer): String =
     if (offer.operationType == OperationType.VENTA) "Comprar" else "Vender"
 
 private fun isValidOfferAmount(amount: Double?, offer: Offer): Boolean =
-    amount != null && amount >= offer.minimumAmount && amount <= offer.offeredAmount
+    amount != null &&
+        amount >= offer.minimumAmount &&
+        amount <= offer.offeredAmount &&
+        ((offer.offeredAmount - amount) <= 0.0001 || (offer.offeredAmount - amount) >= offer.minimumAmount)
 
 private fun paymentMethodsForOffer(offer: Offer): List<PaymentMethodOption> {
     val labels = if (offer.paymentMethods.isEmpty()) {

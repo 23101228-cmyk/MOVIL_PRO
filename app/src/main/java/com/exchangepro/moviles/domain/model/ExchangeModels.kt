@@ -98,7 +98,12 @@ data class Transaction(
     val totalToPay: Double,
     val currency: CurrencyCode,
     val status: TransactionStatus,
-    val voucherUrl: String? = null
+    val voucherUrl: String? = null,
+    val toCurrency: CurrencyCode = CurrencyCode.PEN,
+    val fundsOwnerId: String = "",
+    val fundsRecipientId: String = "",
+    val heldCurrency: CurrencyCode = currency,
+    val heldAmount: Double = operationAmount
 )
 
 data class PaymentData(

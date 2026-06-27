@@ -39,6 +39,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.exchangepro.moviles.data.repository.FirebaseOfferRepository
+import com.exchangepro.moviles.data.repository.FirebaseTransactionRepository
 import com.exchangepro.moviles.data.repository.FirebaseUserRepository
 import com.exchangepro.moviles.data.repository.FirebaseWalletRepository
 import com.exchangepro.moviles.domain.model.AppUser
@@ -61,9 +62,11 @@ fun HomeScreen(navController: NavController) {
     val userRepository = remember { FirebaseUserRepository() }
     val walletRepository = remember { FirebaseWalletRepository() }
     val offerRepository = remember { FirebaseOfferRepository() }
+    val transactionRepository = remember { FirebaseTransactionRepository() }
     var user by remember { mutableStateOf<AppUser?>(null) }
     var wallet by remember { mutableStateOf(Wallet(userId = "", balances = emptyList())) }
     var offers by remember { mutableStateOf(emptyList<Offer>()) }
+    var transactions by remember { mutableStateOf(emptyList<Transaction>()) }
     var loadError by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
@@ -71,6 +74,7 @@ fun HomeScreen(navController: NavController) {
             user = userRepository.getCurrentUser()
             wallet = walletRepository.getWallet()
             offers = offerRepository.getActiveOffers()
+            transactions = transactionRepository.getMyTransactions()
         } catch (error: Exception) {
             loadError = error.message ?: "No se pudieron cargar los datos."
         }
@@ -78,7 +82,6 @@ fun HomeScreen(navController: NavController) {
 
     val totalPen = wallet.balances.sumOf { if (it.currency.name == "PEN") it.available else it.available * 3.72 }
     val activeOffers = offers.size
-    val transactions = emptyList<Transaction>()
 
     LazyColumn(
         modifier = Modifier.padding(16.dp),
