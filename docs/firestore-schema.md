@@ -16,6 +16,9 @@ ratings/{ratingId}
 notifications/{notificationId}
 walletMovements/{movementId}
 topUps/{topUpId}
+withdrawals/{withdrawalId}
+attachments/{attachmentId}
+feedback/{feedbackId}
 ```
 
 ## users
@@ -194,4 +197,27 @@ crean un retiro y agregan un movimiento negativo.
 
 ## Nota sobre saldos
 
-Cuando se conecte Firebase real, los cambios de saldo deben hacerse con transacciones de Firestore o Cloud Functions. No conviene modificar saldos desde varias pantallas sin una operacion atomica.
+La aplicacion usa transacciones atomicas de Firestore para evitar cambios parciales.
+Sin embargo, sigue siendo un prototipo academico: un cliente modificado podria
+intentar operaciones no previstas. En produccion, las recargas, retiros,
+retenciones, liberaciones y resoluciones de disputas deben ejecutarse en un
+backend confiable o Cloud Functions.
+
+## Reglas de seguridad
+
+El archivo `firestore.rules` exige Firebase Authentication y aplica acceso por
+propietario, participantes de una transaccion y rol `ADMIN`. Tambien limita los
+adjuntos a JPEG de 500 KB y bloquea eliminaciones directas de registros
+financieros.
+
+Para publicarlas desde la raiz del proyecto:
+
+```powershell
+firebase login
+firebase use <ID_DEL_PROYECTO>
+firebase deploy --only firestore:rules
+```
+
+Antes de desplegar, el usuario administrador debe tener `"role": "ADMIN"` en
+`users/{uid}`. Los usuarios registrados por la aplicacion siempre nacen con
+`"role": "USER"`.

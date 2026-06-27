@@ -1,0 +1,131 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return signedIn() &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "ADMIN";
+    }
+
+    function transactionParticipant(data) {
+      return signedIn() &&
+        (data.buyerId == request.auth.uid || data.sellerId == request.auth.uid);
+    }
+
+    function disputeParticipant(data) {
+      return signedIn() &&
+        (data.reporterId == request.auth.uid ||
+         data.buyerId == request.auth.uid ||
+         data.sellerId == request.auth.uid);
+    }
+
+    match /users/{userId} {
+      allow create: if isOwner(userId) && request.resource.data.role == "USER";
+      allow read: if isOwner(userId) || isAdmin();
+      allow update: if isAdmin() ||
+        (isOwner(userId) &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(["names", "lastNames", "fullName", "phone", "documentNumber", "photoAttachmentId"]));
+      allow delete: if false;
+    }
+
+    match /wallets/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create: if isOwner(userId);
+      allow update: if isOwner(userId) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(["updatedAt"]);
+      allow delete: if false;
+
+      match /balances/{currency} {
+        allow read: if isOwner(userId) || isAdmin();
+        // El cliente mueve saldos de ambas partes en transacciones atomicas.
+        // Para produccion, estas escrituras deben pasar a Cloud Functions.
+        allow write: if signedIn();
+      }
+    }
+
+    match /offers/{offerId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if signedIn();
+      allow delete: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    match /transactions/{transactionId} {
+      allow read: if isAdmin() || transactionParticipant(resource.data);
+      allow create: if transactionParticipant(request.resource.data);
+      allow update: if isAdmin() || transactionParticipant(resource.data);
+      allow delete: if false;
+    }
+
+    match /paymentData/{userId} {
+      allow read, create, update, delete: if isOwner(userId) || isAdmin();
+    }
+
+    match /disputes/{disputeId} {
+      allow read: if isAdmin() || disputeParticipant(resource.data);
+      allow create: if disputeParticipant(request.resource.data);
+      allow update: if isAdmin() || disputeParticipant(resource.data);
+      allow delete: if false;
+    }
+
+    match /ratings/{ratingId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.raterId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if signedIn();
+      allow update: if signedIn() && resource.data.userId == request.auth.uid &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(["read", "readAt"]);
+      allow delete: if false;
+    }
+
+    match /walletMovements/{movementId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if signedIn();
+      allow update, delete: if false;
+    }
+
+    match /topUps/{topUpId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /withdrawals/{withdrawalId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if false;
+    }
+
+    match /attachments/{attachmentId} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.ownerId == request.auth.uid &&
+        request.resource.data.size <= 512000 &&
+        request.resource.data.contentType == "image/jpeg";
+      allow update, delete: if false;
+    }
+
+    match /feedback/{feedbackId} {
+      allow read: if isAdmin() || (signedIn() && resource.data.userId == request.auth.uid);
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isAdmin();
+      allow delete: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
