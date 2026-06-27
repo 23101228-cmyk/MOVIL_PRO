@@ -5,6 +5,8 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.exchangepro.moviles.presentation.admin.AdminDashboardScreen
+import com.exchangepro.moviles.presentation.admin.AdminDisputesScreen
+import com.exchangepro.moviles.presentation.admin.AdminFeedbackScreen
 import com.exchangepro.moviles.presentation.auth.LoginScreen
 import com.exchangepro.moviles.presentation.auth.RegisterScreen
 import com.exchangepro.moviles.presentation.disputes.DisputesScreen
@@ -62,10 +64,10 @@ fun ExchangeProNavGraph() {
             }
         }
         composable(Route.AdminDisputes.value) {
-            ExchangeScaffold(navController, "Disputas", isAdmin = true) { PendingScreen("Disputas admin", "Integrante 5") }
+            ExchangeScaffold(navController, "Disputas", isAdmin = true) { AdminDisputesScreen() }
         }
         composable(Route.AdminFeedback.value) {
-            ExchangeScaffold(navController, "Feedback", isAdmin = true) { PendingScreen("Feedback admin", "Integrante 5") }
+            ExchangeScaffold(navController, "Feedback", isAdmin = true) { AdminFeedbackScreen() }
         }
         composable(Route.AdminReports.value) {
             ExchangeScaffold(navController, "Reportes", isAdmin = true) { PendingScreen("Reportes admin", "Integrante 5") }
