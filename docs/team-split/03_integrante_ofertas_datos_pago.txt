@@ -1,91 +1,123 @@
-INTEGRANTE 3 - OFERTAS, CREAR OFERTA Y DATOS DE PAGO
-====================================================
+INTEGRANTE 3 - MERCADO DE OFERTAS Y CREACION DE TRANSACCIONES
+=============================================================
 
-Objetivo
---------
-Migrar el flujo P2P principal del web a Android: listar ofertas, ver detalle, crear oferta,
-mis ofertas y configurar datos de pago.
+PROPOSITO DE ESTAS GUIAS
+------------------------
+Todos conocen el flujo global; esta persona explica especialmente como un saldo pasa a oferta y
+como una oferta se convierte en transaccion P2P.
 
-Archivos principales a trabajar
--------------------------------
-1. app/src/main/java/com/exchangepro/moviles/presentation/offers/OfferScreens.kt
-2. app/src/main/java/com/exchangepro/moviles/presentation/payment/PaymentDataScreen.kt
-3. app/src/main/java/com/exchangepro/moviles/data/repository/FirebaseOfferRepository.kt
-4. app/src/main/java/com/exchangepro/moviles/domain/model/ExchangeModels.kt si necesita modelos compartidos
+FLUJO GENERAL COMPLETO DE EXCHANGEPRO
+-------------------------------------
+1. MainActivity -> Theme -> NavGraph -> Login.
+2. Firebase Auth identifica y users/{uid} define USER/ADMIN.
+3. Registro crea perfil, wallet y balances.
+4. Home carga resumen de wallet, ofertas y transacciones.
+5. Wallet recarga/retira y paymentData guarda destinos.
+6. Crear oferta valida monto/tasa/metodos y retiene saldo.
+7. Otro usuario toma la oferta; se reduce disponibilidad y nace una transaccion.
+8. Pagador sube comprobante comprimido; estado pasa a PAGADO.
+9. Propietario libera; saldo retenido llega al receptor y estado pasa a COMPLETADO.
+10. Disputa puede congelar y ADMIN resolver.
+11. Ratings/notificaciones/feedback registran comunicacion.
+12. Reglas Firestore controlan acceso.
 
-Tareas detalladas
+COMO LEER EL CODIGO
+-------------------
+En OfferScreens.kt esta la interaccion. FirebaseOfferRepository contiene reglas de persistencia.
+FirebaseTransactionRepository.createFromOffer es el puente entre mercado y operacion.
+ExchangeModels.kt define Offer, CreateOfferRequest y Transaction.
+
+PARTE DEL INTEGRANTE 3
+----------------------
+Archivos:
+1. presentation/offers/OfferScreens.kt
+2. data/repository/FirebaseOfferRepository.kt
+3. data/repository/FirebaseTransactionRepository.kt (createFromOffer)
+4. domain/model/ExchangeModels.kt
+5. presentation/home/HomeScreen.kt (resumen del mercado)
+6. data/repository/FirebaseWalletRepository.kt (saldo disponible/retenido)
+
+TIPOS DE OFERTA
+---------------
+- VENTA: el dueño ofrece moneda origen; esa moneda queda retenida.
+- COMPRA: el dueño desea moneda origen y retiene la moneda que entregara, calculada con la tasa.
+- fromCurrency, toCurrency y exchangeRate determinan operationAmount y totalToPay.
+- minimumAmount impide operaciones demasiado pequeñas.
+- paymentMethods informa medios aceptados.
+
+CREAR OFERTA PASO A PASO
+------------------------
+1. CreateOfferScreen carga wallet y tasas.
+2. El usuario selecciona COMPRA/VENTA, monedas, tasa, monto y minimo.
+3. La pantalla crea CreateOfferRequest.
+4. FirebaseOfferRepository.createOffer calcula holdCurrency y holdAmount.
+5. Una transaccion Firestore lee el balance correcto.
+6. Verifica available >= holdAmount.
+7. Resta available, suma retained y crea offers/{id} con estado ACTIVA.
+8. Si falla cualquier parte no queda oferta ni saldo retenido parcial.
+
+LISTAR Y CANCELAR
 -----------------
-1. En OfferScreens.kt crear o mejorar:
-   - OffersScreen.
-   - MyOffersScreen.
-   - CreateOfferScreen.
+- getActiveOffers consulta status ACTIVA y excluye las propias para el mercado.
+- getMyActiveOffers filtra por userId.
+- cancelOffer exige ser propietario, devuelve heldAmount de retained a available y cambia
+  estado a CANCELADA.
+- OffersScreen presenta mercado; MyOffersScreen permite cancelar; Home muestra solo resumen.
 
-2. OffersScreen debe tener:
-   - Tabs o botones: Nueva / Mis ofertas.
-   - Cards de ofertas con:
-     usuario
-     moneda origen/destino
-     tasa
-     disponible
-     tipo COMPRA o VENTA
-   - Al tocar una oferta, abrir detalle.
-   - En detalle permitir iniciar compra o venta si no es una oferta propia.
+TOMAR UNA OFERTA
+----------------
+1. El usuario abre una oferta y elige monto/metodo.
+2. La UI llama FirebaseTransactionRepository.createFromOffer.
+3. La transaccion lee oferta y perfil del tomador.
+4. Verifica ACTIVA, que no sea propia, minimo/maximo, tasa y fondos retenidos.
+5. Determina buyer/seller segun COMPRA o VENTA.
+6. Calcula remanente de oferta y evita dejar menos que el minimo.
+7. Reduce offeredAmount y heldAmount de la oferta.
+8. Si se agota, oferta pasa a COMPLETADA; si queda monto valido, sigue ACTIVA.
+9. Crea transactions/{id} con codigo EX-año-id, participantes, monedas, montos, fondosOwner,
+   fondosRecipient y estado PENDIENTE_PAGO.
+10. Crea notificacion al dueño de la oferta.
 
-3. MyOffersScreen debe tener:
-   - Lista de mis ofertas.
-   - Detalle al tocar una oferta.
-   - Boton visible para crear oferta.
-   - Boton o accion para volver a Ofertas/Nueva.
+CASO WALLET INTERNA
+-------------------
+- Antes de escribir, createFromOffer lee el saldo del tomador en la moneda contraria.
+- Si no alcanza, la operacion se rechaza sin cambiar oferta ni balances.
+- Si alcanza, descuenta esa moneda al tomador, acredita al dueño, libera la retencion del
+  dueño y acredita al tomador la otra moneda.
+- Crea cuatro movimientos (salida/entrada por cada moneda), notifica a ambos y nace como
+  COMPLETADO. No usa comprobante ni liberacion manual.
 
-4. CreateOfferScreen debe parecerse al web:
-   - Titulo "Crear Oferta".
-   - Card de saldo disponible.
-   - Seccion "Detalles de la Oferta".
-   - Selectores desplegables para:
-     Tipo de Operacion.
-     Moneda a Vender.
-     Moneda a Recibir.
-     Tasa de Cambio.
-   - Campos numericos para:
-     Monto a Ofertar.
-     Monto Minimo por operacion.
-   - Botones Cancelar y Publicar Oferta.
-   - Validar solo al publicar, no antes.
-   - Las listas deben abrir al tocar la flecha o el campo.
+CONCEPTO DE RETENCION
+---------------------
+La app usa un escrow academico: el saldo se separa en available/retained. Crear la oferta ya
+retiene; tomarla mueve parte de la retencion desde la oferta a la transaccion. Nadie puede retirar
+esa porcion hasta completar, cancelar o resolver disputa.
 
-5. FirebaseOfferRepository.kt:
-   - Preparar createOffer.
-   - Preparar retencion de saldo segun operacion.
-   - Para COMPRA: retener moneda destino si aplica.
-   - Para VENTA: retener moneda origen.
-   - Puede quedar preparado con Firestore, aunque algunos datos sean demo.
+DOCUMENTOS QUE DEBE MOSTRAR
+---------------------------
+offers/{offerId}: dueño, tipo, monedas, tasa, offeredAmount, heldAmount, estado.
+transactions/{transactionId}: buyer/seller, totalToPay, heldCurrency, heldAmount, estados.
+wallets/{uid}/balances/{currency}: available/retained.
 
-6. PaymentDataScreen.kt debe tener:
-   - Seccion Yape:
-     numero de 9 digitos.
-   - Seccion Plin:
-     numero de 9 digitos.
-   - Seccion Transferencia Bancaria:
-     selector de banco.
-     cuenta bancaria.
-     CCI.
-   - Bancos como lista fija:
-     BCP, Interbank, BBVA, Scotiabank.
-   - Validaciones:
-     Yape/Plin: 9 digitos.
-     Cuenta: 14 digitos.
-     CCI: 20 digitos.
+VALIDACIONES IMPORTANTES
+------------------------
+- No tomar oferta propia.
+- Oferta ACTIVA.
+- Monto entre minimo y disponible.
+- Tasa positiva.
+- Retenido suficiente.
+- Remanente cero o mayor/igual al minimo.
+- Cancelacion solo por dueño.
 
-Comandos sugeridos
-------------------
-git checkout -b feature/ofertas-datos-pago
-git add app/src/main/java/com/exchangepro/moviles/presentation/offers/OfferScreens.kt
-git add app/src/main/java/com/exchangepro/moviles/presentation/payment/PaymentDataScreen.kt
-git add app/src/main/java/com/exchangepro/moviles/data/repository/FirebaseOfferRepository.kt
-git add app/src/main/java/com/exchangepro/moviles/domain/model/ExchangeModels.kt
-git commit -m "Implement offers creation and payment data flows"
+DEMOSTRACION SUGERIDA
+---------------------
+1. Usuario A recarga USD y crea VENTA USD->PEN.
+2. Mostrar como USD pasa de available a retained.
+3. Usuario B ve/toma una parte.
+4. Mostrar oferta reducida y transaccion PENDIENTE_PAGO.
+5. Relacionar buyer/seller/fundsOwner/fundsRecipient.
 
-Notas para el equipo
---------------------
-La lista de bancos no usa API en el web original; era una lista fija.
-Este modulo depende de las rutas del integrante 1 y de algunos modelos del integrante 2.
+IDEA CENTRAL PARA EXPLICAR
+--------------------------
+Una oferta no es solo un anuncio: bloquea saldo real del prototipo. createFromOffer transforma
+atomicamente una parte del anuncio en una obligacion entre dos usuarios.

@@ -1,116 +1,129 @@
-INTEGRANTE 5 - PANEL ADMINISTRADOR
-==================================
+INTEGRANTE 5 - ADMINISTRACION, SEGURIDAD, REPORTES Y CIERRE TECNICO
+==================================================================
 
-Objetivo
---------
-Crear el flujo administrador en Android, basado en el frontend web:
-dashboard, disputas, feedback, reportes y notificaciones.
+PROPOSITO DE ESTAS GUIAS
+------------------------
+Esta persona explica como el administrador observa y resuelve el sistema, y cierra la exposicion
+con seguridad, configuracion y limitaciones academicas.
 
-Archivos principales a trabajar
--------------------------------
-1. app/src/main/java/com/exchangepro/moviles/presentation/admin/AdminScreens.kt
-2. app/src/main/java/com/exchangepro/moviles/presentation/navigation/Routes.kt
-3. app/src/main/java/com/exchangepro/moviles/presentation/navigation/ExchangeScaffold.kt
-4. app/src/main/java/com/exchangepro/moviles/presentation/navigation/ExchangeProNavGraph.kt
-5. app/src/main/java/com/exchangepro/moviles/presentation/auth/AuthScreens.kt
+FLUJO GENERAL COMPLETO DE EXCHANGEPRO
+-------------------------------------
+1. MainActivity carga tema/NavGraph/Login.
+2. Auth autentica y users/{uid}.role enruta USER o ADMIN.
+3. Registro crea perfil/wallet/balances.
+4. USER consulta Home, wallet, medios, ofertas y operaciones.
+5. Recarga crea saldo/movimiento; oferta retiene; tomar crea transaccion.
+6. Imagen comprimida confirma pago.
+7. Liberacion completa y mueve fondos; disputa congela.
+8. ADMIN ve metricas y pendientes.
+9. ADMIN resuelve disputa atomicamente o responde feedback.
+10. Reportes consultan colecciones reales.
+11. Notificaciones comunican eventos.
+12. firestore.rules limita operaciones.
 
-Tareas detalladas
------------------
-1. Crear carpeta:
-   app/src/main/java/com/exchangepro/moviles/presentation/admin
+COMO LEER EL CODIGO
+-------------------
+AdminScreens.kt es presentacion. FirebaseAdminRepository concentra consultas globales y acciones
+privilegiadas. firestore.rules es la ultima barrera: la UI oculta acciones, pero las reglas
+deciden si Firebase acepta la solicitud.
 
-2. Crear AdminScreens.kt con:
-   - AdminDashboardScreen.
-   - AdminDisputesScreen.
-   - AdminFeedbackScreen.
-   - AdminReportsScreen.
-   - AdminNotificationsScreen.
+PARTE DEL INTEGRANTE 5
+----------------------
+Archivos:
+1. presentation/admin/AdminScreens.kt
+2. data/repository/FirebaseAdminRepository.kt
+3. presentation/navigation/ExchangeScaffold.kt y ExchangeProNavGraph.kt
+4. firestore.rules
+5. firebase.json
+6. docs/firestore-schema.md
+7. app/src/main/AndroidManifest.xml
+8. app/build.gradle.kts, build.gradle.kts, gradle/libs.versions.toml
+9. .gitignore
 
-3. AdminDashboardScreen:
-   - Titulo Dashboard.
-   - Subtitulo Panel de control administrativo.
-   - Barra de estado de plataforma.
-   - Cards de estadisticas:
-     Usuarios Registrados.
-     Ofertas Activas.
-     Transacciones Completadas.
-     Disputas Pendientes.
-   - Actividad reciente.
-   - Acciones rapidas para ir a disputas y reportes.
+ACCESO ADMIN
+------------
+- Login usa la misma cuenta Firebase.
+- role ADMIN en users/{uid} provoca navegacion a AdminDashboard.
+- Registro siempre crea USER. El primer ADMIN se asigna manualmente en consola.
+- requireAdmin vuelve a leer el perfil antes de consultas/acciones administrativas.
+- Nunca se guarda contraseña administrativa en codigo.
 
-4. AdminDisputesScreen:
-   - Lista de disputas.
-   - Filtros Todos / Pendientes / Resueltas.
-   - Cards expandibles.
-   - Ver comprador, vendedor, monto, evidencia y descripcion.
-   - Dialog para resolver:
-     decision.
-     observacion.
-   - Al resolver, actualizar estado local a Resueltas.
+DASHBOARD
+---------
+FirebaseAdminRepository.dashboard:
+1. requireAdmin.
+2. Lee users, offers, transactions, disputes.
+3. Cuenta usuarios, ofertas ACTIVA, transacciones COMPLETADO y disputas PENDIENTE.
+4. AdminDashboardScreen representa esos datos y accesos rapidos.
 
-5. AdminFeedbackScreen:
-   - Estadisticas de feedback.
-   - Filtros Todos / RECOMENDACION / BUG_REPORT.
-   - Cards expandibles.
-   - Dialog para responder comentario.
-   - Al responder, actualizar estado a REVISADO.
+RESOLUCION DE DISPUTA
+---------------------
+resolveDispute es la funcion administrativa mas sensible:
+1. Comprueba ADMIN, nota no vacia y disputa PENDIENTE.
+2. Obtiene transaccion EN_DISPUTA, owner, recipient, moneda y retenido.
+3. Lee balance retenido.
+4. Decision liberar: resta retained al owner y suma available al recipient.
+5. Decision devolver: resta retained y devuelve available al owner.
+6. Actualiza transaccion a COMPLETADO o CANCELADO.
+7. Disputa pasa a RESUELTA con decision, nota, resolvedBy y timestamp.
+8. Crea movimiento y notifica buyer/seller.
+9. Todo sucede en una transaccion Firestore.
 
-6. AdminReportsScreen:
-   - Filtros:
-     Tipo de reporte.
-     Moneda.
-     Estado.
-   - Boton Generar Reporte.
-   - Tabla/lista de resultados demo.
-   - Boton Exportar preparado.
+FEEDBACK, REPORTES Y ALERTAS
+----------------------------
+- feedback consulta todos para ADMIN; respondFeedback actualiza respuesta/estado y crea
+  notificacion al usuario.
+- report selecciona coleccion segun tipo y filtra moneda/estado en el prototipo.
+- AdminNotificationsScreen deriva alertas de disputas y feedback pendientes.
+- No exporta Excel/PDF actualmente; muestra resultados dentro de la app.
 
-7. AdminNotificationsScreen:
-   - Lista de alertas administrativas.
-   - Mostrar Nuevo si no fue leida.
+REGLAS FIRESTORE
+----------------
+Funciones: signedIn, isOwner, isAdmin, transactionParticipant, disputeParticipant.
+Ejemplos:
+- users: propietario/admin; usuario no cambia role.
+- transactions: participantes/admin.
+- paymentData: dueño/admin.
+- disputes: participantes/admin.
+- notifications: destinatario/admin; destinatario solo cambia read/readAt.
+- attachments: autenticado, JPEG y <=512000 bytes.
+- regla final deniega cualquier coleccion no declarada.
 
-8. Modificar Routes.kt:
-   - admin_dashboard
-   - admin_disputes
-   - admin_feedback
-   - admin_reports
-   - admin_notifications
+LIMITACION IMPORTANTE
+---------------------
+El prototipo ejecuta movimientos desde el cliente para evitar backend de pago. Las reglas reducen
+acceso, pero seguridad financiera de produccion necesita Cloud Functions/servidor confiable,
+validacion real de Yape/banco, auditoria y secretos fuera de APK.
 
-9. Modificar ExchangeScaffold.kt:
-   - Agregar parametro isAdmin.
-   - Si isAdmin es true, mostrar menu:
-     Dashboard.
-     Disputas.
-     Feedback.
-     Reportes.
-     Notificaciones.
-   - Si isAdmin es false, mostrar menu normal de usuario.
+CONFIGURACION
+-------------
+- firebase.json apunta a firestore.rules.
+- Reglas se publican en Firebase Console o firebase deploy --only firestore:rules.
+- google-services.json conecta proyecto, queda en app/ y .gitignore.
+- AndroidManifest.xml declara INTERNET y desactiva backup.
+- app/build.gradle.kts declara Firebase/Compose/Navigation/Analytics.
+- ExchangeRateRepository consume Frankfurter; si falla usa fallback.
 
-10. Modificar ExchangeProNavGraph.kt:
-   - Registrar todas las rutas admin.
-   - Usar ExchangeScaffold(isAdmin = true).
+PRUEBAS Y GIT
+-------------
+Comandos:
+gradlew.bat assembleDebug
+gradlew.bat testDebugUnitTest
+gradlew.bat lintDebug
 
-11. Modificar AuthScreens.kt:
-   - Login mock con:
-     admin@exchange-pro.com
-   - Si usa ese correo, navegar a AdminDashboard.
-   - La contrasena puede ser cualquiera no vacia hasta conectar Firebase.
-   - Para probar usar:
-     admin@exchange-pro.com / Admin123
+El repositorio no contiene datos de Firestore ni usuarios; Git solo versiona codigo/configuracion.
+Los cambios se desarrollan en feature/firebase-integracion y se fusionan a master por Pull Request.
 
-Comandos sugeridos
-------------------
-git checkout -b feature/admin-panel
-git add app/src/main/java/com/exchangepro/moviles/presentation/admin
-git add app/src/main/java/com/exchangepro/moviles/presentation/navigation/Routes.kt
-git add app/src/main/java/com/exchangepro/moviles/presentation/navigation/ExchangeScaffold.kt
-git add app/src/main/java/com/exchangepro/moviles/presentation/navigation/ExchangeProNavGraph.kt
-git add app/src/main/java/com/exchangepro/moviles/presentation/auth/AuthScreens.kt
-git commit -m "Implement admin panel flow"
+DEMOSTRACION SUGERIDA
+---------------------
+1. Entrar como ADMIN y enseñar metricas reales.
+2. Resolver disputa mostrando balances antes/despues.
+3. Responder feedback y revisar notificacion del usuario.
+4. Generar reporte.
+5. Abrir firestore.rules y explicar dos reglas.
+6. Cerrar con diferencias prototipo/produccion.
 
-Notas para el equipo
---------------------
-Este modulo depende de la navegacion base del integrante 1.
-El admin real se conectara despues con Firebase Auth + Firestore role ADMIN.
-En el SQL original el admin era:
-admin@exchange-pro.com / Admin123
-con IdRol = 2.
+IDEA CENTRAL PARA EXPLICAR
+--------------------------
+El administrador no es una interfaz separada sin control: el rol se comprueba en datos y reglas.
+Las decisiones que mueven dinero se ejecutan atomicamente y dejan estado, movimiento y avisos.

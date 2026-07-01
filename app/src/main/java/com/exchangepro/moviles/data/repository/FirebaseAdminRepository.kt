@@ -65,6 +65,9 @@ class FirebaseAdminRepository(
         require(profile.getString("role") == "ADMIN") { "Esta cuenta no tiene permisos de administrador." }
     }
 
+    /**
+     * Reune conteos globales para el dashboard despues de comprobar el rol ADMIN.
+     */
     suspend fun dashboard(): AdminDashboardData {
         requireAdmin()
         val db = dbProvider()
@@ -107,6 +110,10 @@ class FirebaseAdminRepository(
         }
     }
 
+    /**
+     * Emite el fallo administrativo y mueve el saldo retenido hacia la contraparte
+     * o de vuelta al propietario. Estado, movimiento y avisos se confirman juntos.
+     */
     suspend fun resolveDispute(disputeId: String, releaseToRecipient: Boolean, note: String) {
         require(note.isNotBlank()) { "Escribe una observacion." }
         requireAdmin()
@@ -224,6 +231,9 @@ class FirebaseAdminRepository(
             }
     }
 
+    /**
+     * Marca feedback como revisado y entrega la respuesta mediante una notificacion.
+     */
     suspend fun respondFeedback(id: String, response: String) {
         require(response.isNotBlank()) { "Escribe una respuesta." }
         requireAdmin()
@@ -254,6 +264,10 @@ class FirebaseAdminRepository(
         }.awaitAdmin()
     }
 
+    /**
+     * Construye filas de reporte desde la coleccion seleccionada y aplica filtros
+     * academicos de moneda y estado en el cliente.
+     */
     suspend fun report(type: String, currency: String, status: String): List<AdminReportRow> {
         requireAdmin()
         val collection = when (type) {

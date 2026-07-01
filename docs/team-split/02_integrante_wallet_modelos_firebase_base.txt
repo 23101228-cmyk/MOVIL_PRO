@@ -1,84 +1,132 @@
-INTEGRANTE 2 - MODELOS, WALLET Y BASE FIREBASE
-==============================================
+INTEGRANTE 2 - MODELOS, FIRESTORE, WALLET, TASAS Y DATOS DE PAGO
+===============================================================
 
-Objetivo
---------
-Construir la base de datos en codigo para ExchangePro: modelos de dominio, constantes de Firebase,
-repositorios iniciales y pantalla Wallet con recargas.
+PROPOSITO DE ESTAS GUIAS
+------------------------
+Cada integrante recibe el flujo completo y una especialidad. Las rutas parten de
+D:\MOVILES_PRO_2.
 
-Archivos principales a trabajar
--------------------------------
-1. app/src/main/java/com/exchangepro/moviles/domain/model/ExchangeModels.kt
-2. app/src/main/java/com/exchangepro/moviles/data/firebase/FirebasePlaceholders.kt
-3. app/src/main/java/com/exchangepro/moviles/data/repository/ExchangeRateRepository.kt
-4. app/src/main/java/com/exchangepro/moviles/data/repository/FirebaseWalletRepository.kt
-5. app/src/main/java/com/exchangepro/moviles/presentation/wallet/WalletScreen.kt
-6. docs/firestore-schema.md si se documenta el esquema
+FLUJO GENERAL COMPLETO DE EXCHANGEPRO
+-------------------------------------
+1. MainActivity aplica el tema y abre ExchangeProNavGraph.
+2. Login usa FirebaseAuthRepository; Firebase Authentication valida y users/{uid} define rol.
+3. Registro crea perfil, wallet y balances PEN/USD/EUR mediante un batch.
+4. Home combina perfil, saldos, ofertas y transacciones.
+5. Wallet consulta balances y movimientos; recarga/retiro usan transacciones atomicas.
+6. paymentData almacena Yape, Plin y banco del usuario.
+7. Crear oferta retiene saldo; tomar oferta crea transaccion.
+8. El comprobante se comprime y almacena en attachments.
+9. Liberar fondos mueve saldo retenido y completa la operacion.
+10. Una disputa congela la operacion; ADMIN decide el destino.
+11. Notificaciones, feedback y ratings completan la interaccion.
+12. firestore.rules limita acceso por uid, participante y rol.
 
-Tareas detalladas
------------------
-1. En ExchangeModels.kt definir o completar:
-   - CurrencyCode: PEN, USD, EUR, JPY, GBP.
-   - DepositAccount.
-   - WalletMovement.
-   - TopUpRequest.
-   - ExchangeRate.
-   - CreateOfferRequest si aun no existe.
+COMO LEER EL CODIGO
+-------------------
+Pantalla -> Repository -> coleccion Firestore -> data class -> estado Compose -> pantalla.
+domain/model define el lenguaje comun; data/repository implementa persistencia; presentation
+solo coordina interfaz y acciones.
 
-2. En FirebasePlaceholders.kt agregar nombres de colecciones:
-   - USERS
-   - WALLETS
-   - BALANCES
-   - TOP_UPS
-   - OFFERS
-   - TRANSACTIONS
-   - PAYMENT_METHODS
-   - DISPUTES
-   - FEEDBACK
-   - NOTIFICATIONS
+PARTE DEL INTEGRANTE 2
+----------------------
+Tema: estructura de datos, colecciones, wallet, recargas, retiros, conversion monetaria y
+datos de pago.
 
-3. Crear ExchangeRateRepository.kt:
-   - Preparar consumo de API externa de tasas.
-   - Usar api.frankfurter.app como referencia inicial.
-   - Si no hay red o falla la API, devolver tasas demo para que la UI no se rompa.
-
-4. Crear FirebaseWalletRepository.kt:
-   - Preparar metodos para leer saldos.
-   - Preparar metodos para crear solicitud de recarga.
-   - Preparar movimiento de wallet.
-   - Usar Firestore de forma defensiva para que no crashee si aun falta google-services.json.
-
-5. Crear o mejorar WalletScreen.kt:
-   - Mostrar saldos por moneda.
-   - Mostrar tipo de cambio.
-   - Mostrar movimientos recientes.
-   - Boton o modal "Recargar saldo".
-   - Modal similar al web:
-     Wallet #2.
-     Selector de moneda.
-     Monto a recargar.
-     Cuentas para depositar: Yape, Plin, BCP u otras.
-   - Por ahora puede usar datos demo.
-
-6. Documentar esquema propuesto en docs/firestore-schema.md:
-   users/{uid}
-   wallets/{uid}/balances/{currency}
-   topUps/{topUpId}
-   walletMovements/{movementId}
-
-Comandos sugeridos
-------------------
-git checkout -b feature/wallet-firebase-base
-git add app/src/main/java/com/exchangepro/moviles/domain/model/ExchangeModels.kt
-git add app/src/main/java/com/exchangepro/moviles/data/firebase/FirebasePlaceholders.kt
-git add app/src/main/java/com/exchangepro/moviles/data/repository/ExchangeRateRepository.kt
-git add app/src/main/java/com/exchangepro/moviles/data/repository/FirebaseWalletRepository.kt
-git add app/src/main/java/com/exchangepro/moviles/presentation/wallet/WalletScreen.kt
-git add docs/firestore-schema.md
-git commit -m "Add wallet models Firebase base and recharge flow"
-
-Notas para el equipo
+ARCHIVOS PRINCIPALES
 --------------------
-Este commit puede no funcionar solo si aun no existe la navegacion base del integrante 1.
-No conectar todavia un Firebase real con credenciales privadas.
-No subir google-services.json real si el profesor no lo pidio publicamente.
+1. domain/model/ExchangeModels.kt
+2. data/firebase/FirebasePlaceholders.kt
+3. data/repository/FirebaseWalletRepository.kt
+4. presentation/wallet/WalletScreen.kt
+5. data/repository/ExchangeRateRepository.kt
+6. data/repository/FirebasePaymentDataRepository.kt
+7. presentation/payment/PaymentDataScreen.kt
+8. docs/firestore-schema.md
+
+MODELOS Y COLECCIONES
+---------------------
+- CurrencyCode evita monedas escritas de maneras distintas.
+- Wallet contiene userId y lista de WalletBalance.
+- WalletBalance separa available de retained. Retenido no puede retirarse mientras sostiene
+  una oferta/transaccion.
+- WalletMovement representa el historial.
+- TopUpRequest y WithdrawalRequest llevan datos validados desde la UI al repositorio.
+- FirebaseCollections centraliza users, wallets, offers, transactions, etc.; cambiar un nombre
+  alli impacta todas las consultas.
+
+LECTURA DE WALLET
+-----------------
+FirebaseWalletRepository.getWallet:
+1. Obtiene uid de FirebaseAuth.
+2. Lee wallets/{uid}/balances.
+3. Convierte documentos a WalletBalance.
+4. Ordena por moneda y devuelve Wallet.
+
+getMovements consulta walletMovements por userId, transforma Timestamp y ordena en cliente.
+WalletScreen llama refresh dentro de coroutine, actualiza wallet/movements/destinos y Compose
+redibuja automaticamente.
+
+RECARGA
+-------
+1. El usuario elige PEN/USD/EUR, monto, cuenta receptora de ExchangePro y referencia.
+2. La referencia es el codigo que entrega Yape/Plin/banco; en el prototipo se registra pero no
+   se valida contra una API bancaria.
+3. topUp ejecuta una transaccion Firestore.
+4. Lee el saldo actual, incrementa available, crea topUps y walletMovements.
+5. Si una escritura falla, ninguna se confirma.
+6. Es simulacion academica: en produccion un backend verificaria el pago antes de acreditar.
+
+RETIRO
+------
+1. PaymentDataScreen guarda destinos del usuario en paymentData/{uid}.
+2. availableDestinations convierte campos no vacios en opciones.
+3. WithdrawDialog permite elegir moneda y destino.
+4. withdraw lee saldo y paymentData dentro de una transaccion.
+5. Verifica saldo suficiente, descuenta available y crea withdrawals + movimiento negativo.
+6. El prototipo lo marca completado; produccion requeriria proveedor de pagos/backend.
+
+SALDO TOTAL Y TASAS
+-------------------
+- ExchangeRateRepository consulta Frankfurter v2 (api.frankfurter.dev) mediante HttpURLConnection.
+- La API devuelve moneda extranjera por PEN; el repositorio invierte la equivalencia.
+- Compra/venta usan un margen porcentual de 0.8 %, valido tambien para monedas pequeñas como JPY.
+- Si Internet falla, fallbackRates mantiene valores de demostracion.
+- WalletHero convierte disponible + retenido a PEN usando buy y muestra "estimado".
+- Los saldos originales nunca cambian por mostrar el total.
+
+DATOS DE PAGO
+-------------
+- FirebasePaymentDataRepository.get/save/delete usa un documento por uid.
+- La UI valida longitud de telefonos, cuenta y CCI segun banco.
+- Yape/Plin del perfil no se suponen automaticamente: el usuario registra destinos en Datos
+  de pago. Las cuentas mostradas al recargar son cuentas receptoras de ExchangePro.
+
+FIRESTORE RELEVANTE
+-------------------
+wallets/{uid}
+wallets/{uid}/balances/PEN|USD|EUR
+walletMovements/{id}
+topUps/{id}
+withdrawals/{id}
+paymentData/{uid}
+
+API Y CONFIGURACION
+-------------------
+- INTERNET: app/src/main/AndroidManifest.xml.
+- Frankfurter: data/repository/ExchangeRateRepository.kt.
+- Firebase Auth/Firestore: app/build.gradle.kts y google-services.json.
+- Esquema humano: docs/firestore-schema.md.
+- Seguridad: firestore.rules.
+
+DEMOSTRACION SUGERIDA
+---------------------
+1. Mostrar balances cero creados al registrar.
+2. Recargar USD y observar balance + topUp + movimiento.
+3. Explicar por que el total estimado en PEN usa tasa buy.
+4. Registrar Yape/banco y retirar una parte.
+5. Señalar available versus retained en Firestore.
+
+IDEA CENTRAL PARA EXPLICAR
+--------------------------
+La wallet no es un numero unico: es una coleccion de saldos por moneda. Cada operacion financiera
+actualiza saldo e historial en una transaccion atomica para evitar estados parciales.

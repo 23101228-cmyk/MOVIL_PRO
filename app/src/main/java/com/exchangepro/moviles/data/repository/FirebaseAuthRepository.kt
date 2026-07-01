@@ -25,6 +25,10 @@ class FirebaseAuthRepository(
     private val auth: FirebaseAuth = FirebaseAuth.getInstance(),
     private val db: FirebaseFirestore = FirebaseFirestore.getInstance()
 ) {
+    /**
+     * Autentica credenciales y luego lee users/{uid}; Authentication identifica a la
+     * persona y Firestore aporta el rol que controla la navegacion USER/ADMIN.
+     */
     fun signIn(email: String, password: String, onResult: (Result<UserRole>) -> Unit) {
         auth.signInWithEmailAndPassword(email.trim(), password)
             .addOnSuccessListener { authResult ->
@@ -60,6 +64,10 @@ class FirebaseAuthRepository(
             }
     }
 
+    /**
+     * Crea la identidad y, en un batch, su perfil, wallet y balances iniciales.
+     * Ante un fallo del batch elimina la identidad para evitar cuentas incompletas.
+     */
     fun register(data: RegistrationData, onResult: (Result<Unit>) -> Unit) {
         auth.createUserWithEmailAndPassword(data.email.trim(), data.password)
             .addOnSuccessListener { authResult ->

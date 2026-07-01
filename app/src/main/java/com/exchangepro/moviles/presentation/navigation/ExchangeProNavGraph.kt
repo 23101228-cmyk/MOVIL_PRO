@@ -23,6 +23,10 @@ import com.exchangepro.moviles.presentation.profile.ProfileScreen
 import com.exchangepro.moviles.presentation.transactions.TransactionsScreen
 import com.exchangepro.moviles.presentation.wallet.WalletScreen
 
+/**
+ * Registra todas las pantallas y decide cuales usan el scaffold de usuario o administrador.
+ * Login es el destino inicial; el rol leido desde Firestore determina el siguiente destino.
+ */
 @Composable
 fun ExchangeProNavGraph() {
     val navController = rememberNavController()

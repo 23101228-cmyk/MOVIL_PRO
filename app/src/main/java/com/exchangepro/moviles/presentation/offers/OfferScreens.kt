@@ -59,6 +59,7 @@ import com.exchangepro.moviles.domain.model.CurrencyCode
 import com.exchangepro.moviles.domain.model.ExchangeRate
 import com.exchangepro.moviles.domain.model.Offer
 import com.exchangepro.moviles.domain.model.OperationType
+import com.exchangepro.moviles.domain.model.TransactionStatus
 import com.exchangepro.moviles.domain.model.Wallet
 import com.exchangepro.moviles.presentation.navigation.Route
 import com.exchangepro.moviles.ui.components.ExchangeCard
@@ -728,6 +729,7 @@ private fun TakeOfferDialog(
     var saving by remember { mutableStateOf(false) }
     var createError by remember { mutableStateOf<String?>(null) }
     var transactionCode by remember { mutableStateOf<String?>(null) }
+    var completedInternally by remember { mutableStateOf(false) }
     val methods = remember(offer) { paymentMethodsForOffer(offer) }
     val amountValue = amount.toDoubleOrNull()
     val converted = (amountValue ?: 0.0) * offer.exchangeRate
@@ -749,7 +751,13 @@ private fun TakeOfferDialog(
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
                         Text(
-                            if (instructionsVisible) "Transaccion Iniciada" else "Confirmar Operacion",
+                            if (completedInternally) {
+                                "Intercambio Completado"
+                            } else if (instructionsVisible) {
+                                "Transaccion Iniciada"
+                            } else {
+                                "Confirmar Operacion"
+                            },
                             fontWeight = FontWeight.Bold,
                             style = MaterialTheme.typography.titleLarge
                         )
@@ -843,6 +851,8 @@ private fun TakeOfferDialog(
                                     result.fold(
                                         onSuccess = { transaction ->
                                             transactionCode = transaction.code
+                                            completedInternally =
+                                                transaction.status == TransactionStatus.COMPLETADO
                                             instructionsVisible = true
                                         },
                                         onFailure = { error ->
@@ -862,22 +872,32 @@ private fun TakeOfferDialog(
                         Text(transactionCode.orEmpty(), fontWeight = FontWeight.Bold)
                     }
                     DetailRow("Metodo seleccionado", selectedMethod?.label.orEmpty())
-                    DetailRow("Vas a recibir", "${"%.2f".format(converted)} ${offer.toCurrency}")
-                    DetailRow("Monto exacto a depositar", "${"%.2f".format(amountValue ?: 0.0)} ${offer.fromCurrency}")
+                    DetailRow("Intercambio", "${"%.2f".format(amountValue ?: 0.0)} ${offer.fromCurrency} por ${"%.2f".format(converted)} ${offer.toCurrency}")
                     DetailRow("Tasa de cambio", "%.3f".format(offer.exchangeRate))
 
-                    ExchangeCard {
-                        Text("Datos de la contraparte", fontWeight = FontWeight.Bold)
-                        Spacer(Modifier.height(8.dp))
-                        Text(selectedMethod?.detail.orEmpty(), color = ExchangeMuted)
-                        Text("Titular: ${offer.userName}", color = ExchangeMuted)
+                    if (completedInternally) {
+                        ExchangeCard {
+                            Text("Fondos intercambiados", fontWeight = FontWeight.Bold, color = ExchangePositive)
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                "Wallet Interna valido ambos saldos y transfirio las dos monedas de forma atomica.",
+                                color = ExchangeMuted
+                            )
+                        }
+                    } else {
+                        DetailRow("Monto exacto a depositar", "${"%.2f".format(amountValue ?: 0.0)} ${offer.fromCurrency}")
+                        ExchangeCard {
+                            Text("Datos de la contraparte", fontWeight = FontWeight.Bold)
+                            Spacer(Modifier.height(8.dp))
+                            Text(selectedMethod?.detail.orEmpty(), color = ExchangeMuted)
+                            Text("Titular: ${offer.userName}", color = ExchangeMuted)
+                        }
+                        Text(
+                            "La operacion ya esta registrada. Continua desde Mis Transacciones para confirmar el pago y seguir su estado.",
+                            color = ExchangeMuted,
+                            style = MaterialTheme.typography.bodySmall
+                        )
                     }
-
-                    Text(
-                        "La operacion ya esta registrada. Continua desde Mis Transacciones para confirmar el pago y seguir su estado.",
-                        color = ExchangeMuted,
-                        style = MaterialTheme.typography.bodySmall
-                    )
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                         TextButton(onClick = onDismiss) { Text("Cerrar") }
@@ -917,13 +937,16 @@ private fun isValidOfferAmount(amount: Double?, offer: Offer): Boolean =
         ((offer.offeredAmount - amount) <= 0.0001 || (offer.offeredAmount - amount) >= offer.minimumAmount)
 
 private fun paymentMethodsForOffer(offer: Offer): List<PaymentMethodOption> {
-    val labels = if (offer.paymentMethods.isEmpty()) {
+    val rawLabels = if (offer.paymentMethods.isEmpty()) {
         listOf("Yape", "Plin", "Transferencia Bancaria", "Wallet Interna")
     } else {
         offer.paymentMethods + "Wallet Interna"
     }
+    val labels = rawLabels
+        .map(::paymentMethodLabel)
+        .distinctBy { it.lowercase() }
 
-    return labels.distinct().mapIndexed { index, method ->
+    return labels.mapIndexed { index, method ->
         PaymentMethodOption(
             id = index + 1,
             label = method,
@@ -937,6 +960,16 @@ private fun paymentMethodsForOffer(offer: Offer): List<PaymentMethodOption> {
             }
         )
     }
+}
+
+private fun paymentMethodLabel(value: String): String = when (
+    value.trim().uppercase().replace(' ', '_')
+) {
+    "YAPE" -> "Yape"
+    "PLIN" -> "Plin"
+    "TRANSFERENCIA_BANCARIA" -> "Transferencia Bancaria"
+    "WALLET_INTERNA" -> "Wallet Interna"
+    else -> value.trim()
 }
 
 private fun buildRateOptions(

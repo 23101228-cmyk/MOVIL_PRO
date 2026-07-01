@@ -1,106 +1,128 @@
-INTEGRANTE 1 - BASE DEL PROYECTO, AUTH Y NAVEGACION
-====================================================
+INTEGRANTE 1 - ARQUITECTURA, AUTENTICACION Y NAVEGACION
+=======================================================
 
-Objetivo
---------
-Preparar la base del proyecto Android ExchangePro para que las demas pantallas puedan conectarse.
-Esta persona debe encargarse de la estructura principal, autenticacion mock, navegacion, drawer y limpieza
-del codigo viejo com.soltis.p2p.
+PROPOSITO DE ESTAS GUIAS
+------------------------
+El proyecto se divide entre cinco expositores, pero todos deben comprender el flujo completo.
+Primero se explica ese flujo general y luego la parte que esta persona debe desarrollar con
+mayor profundidad. Las rutas indicadas parten de la raiz D:\MOVILES_PRO_2.
 
-Importante
-----------
-Esta parte es la mas importante para que las demas ramas tengan una base comun. Idealmente este commit debe
-entrar primero al repositorio.
+FLUJO GENERAL COMPLETO DE EXCHANGEPRO
+-------------------------------------
+1. Android inicia MainActivity. onCreate activa edge-to-edge, aplica ExchangeProTheme y llama
+   a ExchangeProNavGraph.
+2. El NavHost empieza en Login. LoginScreen valida correo/contrasena y llama a
+   FirebaseAuthRepository.signIn.
+3. Firebase Authentication valida las credenciales. Luego Firestore lee users/{uid} para
+   conocer el rol. USER va a Home; ADMIN va a AdminDashboard.
+4. Al registrar una cuenta, FirebaseAuthRepository.register crea la identidad en Authentication
+   y un batch crea users/{uid}, wallets/{uid} y balances PEN, USD, EUR con saldo cero.
+5. Home consulta perfil, wallet, ofertas y transacciones mediante repositorios. La UI nunca
+   escribe directamente en Firebase: llama a la capa data/repository.
+6. Wallet permite recargar o retirar. Las operaciones usan transacciones atomicas de Firestore:
+   saldo, movimiento y recarga/retiro se guardan juntos o no se guarda nada.
+7. El usuario registra Yape, Plin o banco en paymentData/{uid}. Estos destinos se usan para
+   retiros y para informar medios de pago.
+8. Al crear una oferta, FirebaseOfferRepository retiene saldo y crea offers/{offerId}. Al tomarla,
+   FirebaseTransactionRepository reduce la oferta y crea transactions/{transactionId}.
+9. Quien paga selecciona una imagen. ImageCompressor la reduce a JPEG <= 500 KB;
+   FirebaseAttachmentRepository la guarda como Blob en attachments y cambia la transaccion
+   de PENDIENTE_PAGO a PAGADO.
+10. El propietario de los fondos verifica el comprobante y libera. complete mueve el retenido
+    a la contraparte, crea movimientos y marca COMPLETADO.
+11. Si existe un problema, una disputa congela la transaccion en EN_DISPUTA. El administrador
+    resuelve si libera a la contraparte o devuelve al propietario.
+12. Feedback, calificaciones y notificaciones tambien son documentos Firestore. Las reglas
+    identifican propietario, participantes y rol ADMIN.
 
-Archivos principales a trabajar
--------------------------------
-1. app/src/main/java/com/exchangepro/moviles/presentation/auth/AuthScreens.kt
-2. app/src/main/java/com/exchangepro/moviles/presentation/navigation/Routes.kt
-3. app/src/main/java/com/exchangepro/moviles/presentation/navigation/ExchangeScaffold.kt
-4. app/src/main/java/com/exchangepro/moviles/presentation/navigation/ExchangeProNavGraph.kt
-5. app/src/main/java/com/exchangepro/moviles/MainActivity.kt
-6. app/src/main/res/drawable/*
-7. app/src/main/res/mipmap-*/*
-8. app/src/main/res/values/colors.xml
-9. app/src/main/res/values/strings.xml
-10. app/src/main/res/xml/backup_rules.xml
-11. app/src/main/res/xml/data_extraction_rules.xml
+COMO LEER EL CODIGO
+-------------------
+La secuencia habitual es:
+Pantalla Compose -> validacion local -> coroutine/callback -> Repository -> Firebase -> modelo
+de dominio -> estado Compose -> recomposicion de pantalla.
 
-Tambien debe mover o retirar del source set principal:
-------------------------------------------------------
-app/src/main/java/com/soltis/p2p/*
+Carpetas:
+- presentation: pantallas, estados de UI y navegacion.
+- data/repository: consultas y operaciones Firebase.
+- data/image: compresion de imagen.
+- domain/model: objetos compartidos y estados del negocio.
+- ui: tema y componentes reutilizables.
 
-Y conservarlo como referencia en:
----------------------------------
-legacy_soltis_reference/soltis/p2p/*
+PARTE DEL INTEGRANTE 1
+----------------------
+Tema: arranque, arquitectura visual, autenticacion, registro, roles y navegacion.
 
-Tareas detalladas
------------------
-1. Crear o mantener el paquete principal:
-   com.exchangepro.moviles
+ARCHIVOS QUE DEBE DOMINAR
+-------------------------
+1. app/src/main/java/com/exchangepro/moviles/MainActivity.kt
+2. app/src/main/java/com/exchangepro/moviles/presentation/auth/AuthScreens.kt
+3. app/src/main/java/com/exchangepro/moviles/data/repository/FirebaseAuthRepository.kt
+4. app/src/main/java/com/exchangepro/moviles/presentation/navigation/Routes.kt
+5. app/src/main/java/com/exchangepro/moviles/presentation/navigation/ExchangeProNavGraph.kt
+6. app/src/main/java/com/exchangepro/moviles/presentation/navigation/ExchangeScaffold.kt
+7. app/src/main/java/com/exchangepro/moviles/ui/theme/*
+8. app/src/main/java/com/exchangepro/moviles/ui/components/ExchangeComponents.kt
+9. app/src/main/AndroidManifest.xml
+10. app/build.gradle.kts y build.gradle.kts de la raiz.
 
-2. Revisar que MainActivity cargue:
-   ExchangeProNavGraph()
+EXPLICACION PASO A PASO
+-----------------------
+A. MainActivity
+- Es el punto de entrada declarado en AndroidManifest.xml.
+- setContent cambia el enfoque XML tradicional por Jetpack Compose.
+- ExchangeProTheme aplica colores y tipografias.
+- ExchangeProNavGraph crea el controlador de navegacion y todas las rutas.
 
-3. Crear el archivo Routes.kt con rutas para:
-   - login
-   - register
-   - home
-   - offers
-   - create_offer
-   - my_offers
-   - wallet
-   - transactions
-   - payment_data
-   - disputes
-   - profile
-   - notifications
-   - admin_dashboard
-   - admin_disputes
-   - admin_feedback
-   - admin_reports
-   - admin_notifications
+B. LoginScreen
+- Mantiene email, password, mensajes y estado loading con remember/mutableStateOf.
+- Valida campos antes de llamar al repositorio.
+- signIn no confia en un correo especial: autentica con Firebase y lee el rol del documento.
+- popUpTo elimina Login del historial, evitando volver con el boton atras.
 
-4. Crear ExchangeScaffold.kt:
-   - Drawer normal para usuario.
-   - Drawer admin para administrador.
-   - Boton de cerrar sesion.
-   - Top bar con titulo.
-   - Parametro isAdmin para cambiar el menu.
+C. FirebaseAuthRepository.signIn
+- signInWithEmailAndPassword autentica.
+- Recupera uid desde FirebaseAuth.
+- Lee users/{uid}; transforma "USER" o "ADMIN" a UserRole.
+- Si falta perfil/rol, cierra sesion para no dejar una identidad incompleta.
+- readableError convierte errores tecnicos en mensajes entendibles.
 
-5. Crear ExchangeProNavGraph.kt:
-   - Registrar todas las rutas.
-   - Login y register sin scaffold.
-   - Pantallas internas con ExchangeScaffold.
-   - Pantallas admin con ExchangeScaffold(isAdmin = true).
+D. Registro
+- RegisterScreen valida nombres, apellidos, correo, telefono de 9 digitos, documento de 8,
+  contrasena y confirmacion.
+- register crea primero el usuario de Authentication.
+- Un WriteBatch crea perfil, wallet y balances. El rol siempre nace como USER.
+- Si falla Firestore, elimina la identidad recien creada para evitar una cuenta huerfana.
+- Un administrador se obtiene cambiando manualmente role a ADMIN en Firestore; nunca se
+  codifica una clave administrativa dentro de la APK.
 
-6. Crear AuthScreens.kt:
-   - Login con correo y contrasena.
-   - Registro con nombres, apellidos, correo, telefono, documento, contrasena y confirmacion.
-   - Validaciones locales.
-   - Login mock:
-     Si el correo es admin@exchange-pro.com, navegar a admin_dashboard.
-     Si es otro correo valido, navegar a home.
-   - Usar trim() al validar correo para evitar espacios copiados.
+E. Navegacion
+- Routes.kt centraliza cadenas; evita escribir rutas diferentes en cada pantalla.
+- ExchangeProNavGraph registra Login/Register sin drawer y pantallas internas con scaffold.
+- ExchangeScaffold define drawer, top bar y cerrar sesion.
+- isAdmin elige menu usuario o menu administrador.
 
-7. Recursos:
-   - Mantener iconos launcher en res/mipmap.
-   - Mantener drawable base.
-   - No borrar archivos de res aunque parezcan pequenos, porque Android los usa para compilar, icono, backup y tema.
+F. UI reutilizable
+- ExchangeComponents.kt contiene ExchangeCard, PrimaryAction, SecondaryAction y StatusPill.
+- Una modificacion alli afecta muchas pantallas; por eso reduce duplicacion.
 
-Comandos sugeridos
-------------------
-git checkout -b feature/base-auth-navegacion
-git add app/src/main/java/com/exchangepro/moviles/MainActivity.kt
-git add app/src/main/java/com/exchangepro/moviles/presentation/auth/AuthScreens.kt
-git add app/src/main/java/com/exchangepro/moviles/presentation/navigation
-git add app/src/main/res
-git add legacy_soltis_reference
-git add app/src/main/java/com/soltis
-git commit -m "Setup base navigation auth and legacy cleanup"
+PERMISOS, DEPENDENCIAS Y CONFIGURACION
+-------------------------------------
+- AndroidManifest.xml declara INTERNET. El selector de imagen del sistema evita permisos
+  generales sobre la galeria.
+- app/build.gradle.kts incluye Compose, Navigation, Firebase Auth, Firestore y Analytics.
+- google-services.json vive en app/, conecta la APK con el proyecto Firebase y esta ignorado
+  por Git.
+- local.properties contiene la ruta del SDK local y tampoco debe subirse.
+- minSdk/targetSdk/applicationId estan en app/build.gradle.kts.
 
-Notas para el equipo
---------------------
-Este commit puede tocar muchos archivos porque limpia el proyecto viejo y deja lista la estructura ExchangePro.
-No incluir .idea/misc.xml.
-No incluir google-services.json real si contiene credenciales del proyecto Firebase.
+DEMOSTRACION SUGERIDA
+---------------------
+1. Mostrar MainActivity y seguir la llamada hasta ExchangeProNavGraph.
+2. Registrar un usuario y mostrar Authentication + users + wallet/balances en Firebase.
+3. Iniciar como USER y luego como ADMIN para demostrar enrutamiento por rol.
+4. Abrir drawer y relacionar cada opcion con Route.
+
+IDEA CENTRAL PARA EXPLICAR
+--------------------------
+Authentication responde "quien es"; el documento users/{uid} responde "que rol y perfil
+tiene"; Navigation decide "que interfaz debe ver".

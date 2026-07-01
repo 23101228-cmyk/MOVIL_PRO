@@ -49,6 +49,10 @@ class FirebaseOfferRepository(
             .filter { it.status == OfferStatus.ACTIVA }
     }
 
+    /**
+     * Retiene el saldo que respalda la oferta y crea el documento offers/{id}
+     * atomicamente, evitando publicar ofertas sin fondos.
+     */
     suspend fun createOffer(request: CreateOfferRequest) {
         val db = dbProvider()
         val uid = currentUserId()
@@ -120,6 +124,9 @@ class FirebaseOfferRepository(
         }.awaitOffer()
     }
 
+    /**
+     * Cancela una oferta propia y devuelve su retencion al saldo disponible.
+     */
     suspend fun cancelOffer(offerId: String) {
         val db = dbProvider()
         val uid = currentUserId()

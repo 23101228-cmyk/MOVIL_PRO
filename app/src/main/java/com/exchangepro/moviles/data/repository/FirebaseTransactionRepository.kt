@@ -25,6 +25,10 @@ class FirebaseTransactionRepository(
     fun currentUserId(): String =
         authProvider().currentUser?.uid ?: error("No hay una sesion activa.")
 
+    /**
+     * Convierte una parte de una oferta activa en transaccion P2P: valida montos,
+     * asigna comprador/vendedor, reduce la oferta y crea la operacion atomicamente.
+     */
     suspend fun createFromOffer(
         offerId: String,
         amount: Double,
@@ -36,6 +40,10 @@ class FirebaseTransactionRepository(
         val takerRef = db.collection(FirebaseCollections.USERS).document(takerId)
         val transactionRef = db.collection(FirebaseCollections.TRANSACTIONS).document()
         val ownerNotificationRef = db.collection(FirebaseCollections.NOTIFICATIONS).document()
+        val takerNotificationRef = db.collection(FirebaseCollections.NOTIFICATIONS).document()
+        val internalMovementRefs = List(4) {
+            db.collection(FirebaseCollections.WALLET_MOVEMENTS).document()
+        }
         var created: Transaction? = null
 
         db.runTransaction { firestoreTransaction ->
@@ -75,8 +83,36 @@ class FirebaseTransactionRepository(
             } else {
                 amount
             }
+            val isInternalWallet = paymentMethod.contains("Wallet", ignoreCase = true)
+            val counterCurrency = if (operationType == OperationType.COMPRA) {
+                fromCurrency
+            } else {
+                toCurrency
+            }
+            val counterAmount = if (operationType == OperationType.COMPRA) {
+                amount
+            } else {
+                amount * exchangeRate
+            }
             require(offerHeldAmount + 0.0001 >= transactionHeldAmount) {
                 "La oferta no tiene fondos retenidos suficientes."
+            }
+
+            val takerPaymentBalanceRef = db.collection(FirebaseCollections.WALLETS)
+                .document(takerId)
+                .collection(FirebaseCollections.BALANCES)
+                .document(counterCurrency.name)
+            val takerPaymentBalance = if (isInternalWallet) {
+                firestoreTransaction.get(takerPaymentBalanceRef)
+            } else {
+                null
+            }
+            val takerAvailable = takerPaymentBalance?.getDouble("available") ?: 0.0
+            if (isInternalWallet) {
+                require(takerAvailable + 0.0001 >= counterAmount) {
+                    "Saldo insuficiente en ${counterCurrency.name}. Necesitas %.2f y tienes %.2f."
+                        .format(counterAmount, takerAvailable)
+                }
             }
 
             val buyerId: String
@@ -115,7 +151,11 @@ class FirebaseTransactionRepository(
                 operationAmount = amount,
                 totalToPay = amount * exchangeRate,
                 currency = fromCurrency,
-                status = TransactionStatus.PENDIENTE_PAGO,
+                status = if (isInternalWallet) {
+                    TransactionStatus.COMPLETADO
+                } else {
+                    TransactionStatus.PENDIENTE_PAGO
+                },
                 toCurrency = toCurrency,
                 fundsOwnerId = ownerId,
                 fundsRecipientId = fundsRecipientId,
@@ -147,23 +187,111 @@ class FirebaseTransactionRepository(
                     "totalToPay" to amount * exchangeRate,
                     "fromCurrency" to fromCurrency.name,
                     "toCurrency" to toCurrency.name,
-                    "status" to TransactionStatus.PENDIENTE_PAGO.name,
+                    "status" to if (isInternalWallet) {
+                        TransactionStatus.COMPLETADO.name
+                    } else {
+                        TransactionStatus.PENDIENTE_PAGO.name
+                    },
                     "voucherUrl" to null,
                     "fundsOwnerId" to ownerId,
                     "fundsRecipientId" to fundsRecipientId,
                     "heldCurrency" to heldCurrency.name,
                     "heldAmount" to transactionHeldAmount,
+                    "completedAt" to if (isInternalWallet) FieldValue.serverTimestamp() else null,
                     "createdAt" to FieldValue.serverTimestamp()
                 )
             )
+
+            if (isInternalWallet) {
+                val ownerHeldBalanceRef = db.collection(FirebaseCollections.WALLETS)
+                    .document(ownerId)
+                    .collection(FirebaseCollections.BALANCES)
+                    .document(heldCurrency.name)
+                val ownerReceiveBalanceRef = db.collection(FirebaseCollections.WALLETS)
+                    .document(ownerId)
+                    .collection(FirebaseCollections.BALANCES)
+                    .document(counterCurrency.name)
+                val takerReceiveBalanceRef = db.collection(FirebaseCollections.WALLETS)
+                    .document(takerId)
+                    .collection(FirebaseCollections.BALANCES)
+                    .document(heldCurrency.name)
+
+                firestoreTransaction.set(
+                    ownerHeldBalanceRef,
+                    mapOf(
+                        "currency" to heldCurrency.name,
+                        "retained" to FieldValue.increment(-transactionHeldAmount),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ),
+                    SetOptions.merge()
+                )
+                firestoreTransaction.set(
+                    takerPaymentBalanceRef,
+                    mapOf(
+                        "currency" to counterCurrency.name,
+                        "available" to (takerAvailable - counterAmount).coerceAtLeast(0.0),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ),
+                    SetOptions.merge()
+                )
+                firestoreTransaction.set(
+                    ownerReceiveBalanceRef,
+                    mapOf(
+                        "currency" to counterCurrency.name,
+                        "available" to FieldValue.increment(counterAmount),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ),
+                    SetOptions.merge()
+                )
+                firestoreTransaction.set(
+                    takerReceiveBalanceRef,
+                    mapOf(
+                        "currency" to heldCurrency.name,
+                        "available" to FieldValue.increment(transactionHeldAmount),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ),
+                    SetOptions.merge()
+                )
+
+                firestoreTransaction.set(
+                    internalMovementRefs[0],
+                    walletMovementData(ownerId, heldCurrency, -transactionHeldAmount, transactionRef.id)
+                )
+                firestoreTransaction.set(
+                    internalMovementRefs[1],
+                    walletMovementData(takerId, heldCurrency, transactionHeldAmount, transactionRef.id)
+                )
+                firestoreTransaction.set(
+                    internalMovementRefs[2],
+                    walletMovementData(takerId, counterCurrency, -counterAmount, transactionRef.id)
+                )
+                firestoreTransaction.set(
+                    internalMovementRefs[3],
+                    walletMovementData(ownerId, counterCurrency, counterAmount, transactionRef.id)
+                )
+            }
             firestoreTransaction.set(
                 ownerNotificationRef,
                 notificationData(
                     userId = ownerId,
-                    title = "Nueva transaccion",
-                    message = "Tu oferta genero la operacion $code."
+                    title = if (isInternalWallet) "Intercambio completado" else "Nueva transaccion",
+                    message = if (isInternalWallet) {
+                        "La operacion $code se completo con Wallet Interna."
+                    } else {
+                        "Tu oferta genero la operacion $code."
+                    }
                 )
             )
+            if (isInternalWallet) {
+                firestoreTransaction.set(
+                    takerNotificationRef,
+                    notificationData(
+                        userId = takerId,
+                        title = "Intercambio completado",
+                        message = "La operacion $code se completo con Wallet Interna."
+                    )
+                )
+            }
             null
         }.awaitTransaction()
 
@@ -200,6 +328,9 @@ class FirebaseTransactionRepository(
         )
     }
 
+    /**
+     * Congela una operacion elegible en EN_DISPUTA y avisa a la contraparte.
+     */
     suspend fun openDispute(transactionId: String) {
         val db = dbProvider()
         val uid = currentUserId()
@@ -239,6 +370,10 @@ class FirebaseTransactionRepository(
         }.awaitTransaction()
     }
 
+    /**
+     * Libera el escrow: resta retenido al propietario, acredita al receptor, crea
+     * movimientos y marca COMPLETADO dentro de una unica transaccion Firestore.
+     */
     suspend fun complete(transactionId: String) {
         val db = dbProvider()
         val uid = currentUserId()
@@ -272,10 +407,7 @@ class FirebaseTransactionRepository(
                 .collection(FirebaseCollections.BALANCES)
                 .document(heldCurrency)
             val ownerBalance = transaction.get(ownerBalanceRef)
-            val recipientBalance = transaction.get(recipientBalanceRef)
             val ownerRetained = ownerBalance.getDouble("retained") ?: 0.0
-            val recipientAvailable = recipientBalance.getDouble("available") ?: 0.0
-            val recipientRetained = recipientBalance.getDouble("retained") ?: 0.0
             require(ownerRetained + 0.0001 >= heldAmount) { "El saldo retenido es insuficiente." }
 
             transaction.set(
@@ -292,8 +424,7 @@ class FirebaseTransactionRepository(
                 recipientBalanceRef,
                 mapOf(
                     "currency" to heldCurrency,
-                    "available" to recipientAvailable + heldAmount,
-                    "retained" to recipientRetained,
+                    "available" to FieldValue.increment(heldAmount),
                     "updatedAt" to FieldValue.serverTimestamp()
                 ),
                 SetOptions.merge()
@@ -343,6 +474,9 @@ class FirebaseTransactionRepository(
         }.awaitTransaction()
     }
 
+    /**
+     * Cancela antes del pago y restaura a la oferta el monto y respaldo retenido.
+     */
     suspend fun cancel(transactionId: String) {
         val db = dbProvider()
         val uid = currentUserId()
@@ -468,6 +602,22 @@ private fun notificationData(userId: String, title: String, message: String): Ma
         "read" to false,
         "createdAt" to FieldValue.serverTimestamp()
     )
+
+private fun walletMovementData(
+    userId: String,
+    currency: CurrencyCode,
+    amount: Double,
+    transactionId: String
+): Map<String, Any> = mapOf(
+    "userId" to userId,
+    "currency" to currency.name,
+    "amount" to amount,
+    "operationType" to "INTERCAMBIO_P2P",
+    "result" to "EXITOSO",
+    "referenceType" to "TRANSACTION",
+    "referenceId" to transactionId,
+    "createdAt" to FieldValue.serverTimestamp()
+)
 
 private suspend fun <T> Task<T>.awaitTransaction(): T = suspendCancellableCoroutine { continuation ->
     addOnSuccessListener { result -> continuation.resume(result) }

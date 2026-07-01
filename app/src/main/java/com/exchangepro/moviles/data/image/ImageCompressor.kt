@@ -24,6 +24,10 @@ object ImageCompressor {
     private const val MAX_BYTES = 500 * 1024
     private const val MIN_QUALITY = 40
 
+    /**
+     * Lee una imagen elegida por el usuario, corrige orientacion y reduce dimensiones/
+     * calidad hasta producir un JPEG apto para el limite documental de Firestore.
+     */
     suspend fun compress(context: Context, uri: Uri): CompressedImage = withContext(Dispatchers.IO) {
         val source = ImageDecoder.createSource(context.contentResolver, uri)
         var bitmap = ImageDecoder.decodeBitmap(source) { decoder, info, _ ->

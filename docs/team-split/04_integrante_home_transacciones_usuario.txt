@@ -1,90 +1,123 @@
-INTEGRANTE 4 - HOME, TRANSACCIONES, DISPUTAS DE USUARIO, PERFIL Y NOTIFICACIONES
-================================================================================
+INTEGRANTE 4 - CICLO DE TRANSACCION, IMAGENES, DISPUTAS Y COMUNICACION
+=====================================================================
 
-Objetivo
---------
-Completar las pantallas de usuario normal alrededor del mercado P2P:
-dashboard, transacciones, disputas, perfil y notificaciones.
+PROPOSITO DE ESTAS GUIAS
+------------------------
+Esta guia repite el contexto general y profundiza desde que existe una transaccion hasta su
+finalizacion, disputa o calificacion.
 
-Archivos principales a trabajar
--------------------------------
-1. app/src/main/java/com/exchangepro/moviles/presentation/home/HomeScreen.kt
-2. app/src/main/java/com/exchangepro/moviles/presentation/transactions/TransactionsScreen.kt
-3. app/src/main/java/com/exchangepro/moviles/presentation/disputes/DisputesScreen.kt
-4. app/src/main/java/com/exchangepro/moviles/presentation/profile/ProfileScreen.kt
-5. app/src/main/java/com/exchangepro/moviles/presentation/notifications/NotificationsScreen.kt
+FLUJO GENERAL COMPLETO DE EXCHANGEPRO
+-------------------------------------
+1. MainActivity abre NavGraph y Login.
+2. Firebase autentica; Firestore define rol.
+3. Registro crea usuario, wallet y balances.
+4. Home reúne datos de varios repositorios.
+5. Wallet/paymentData preparan fondos y medios.
+6. Oferta retiene fondos; tomar oferta crea transaccion.
+7. Pagador adjunta comprobante comprimido.
+8. Contraparte libera fondos o abre disputa.
+9. Completar mueve saldo; cancelar restaura oferta; disputa congela.
+10. Ratings, notificaciones y feedback quedan en Firestore.
+11. Admin resuelve pendientes.
+12. Reglas protegen acceso.
 
-Tareas detalladas
------------------
-1. HomeScreen.kt:
-   - Crear dashboard inicial similar al web.
-   - Saludo o cabecera principal.
-   - Estado del mercado P2P.
-   - Cards de resumen:
-     Wallet.
-     Ofertas.
-     Transacciones.
-     Perfil.
-   - Acciones rapidas:
-     Crear oferta.
-     Recargar wallet.
-   - Ultimas ofertas.
-   - Actividad reciente.
+COMO LEER EL CODIGO
+-------------------
+TransactionsScreen decide que botones mostrar segun status y rol dentro de la operacion.
+FirebaseTransactionRepository aplica las transiciones. FirebaseAttachmentRepository gestiona
+imagenes. Los repositorios de disputa/rating/notificacion/feedback completan el flujo.
 
-2. TransactionsScreen.kt:
-   - Lista de transacciones.
-   - Cards con estado:
-     PENDIENTE.
-     PAGADO.
-     COMPLETADO.
-     CANCELADO.
-     EN_DISPUTA.
-   - Al tocar una transaccion, abrir detalle.
-   - Mostrar timeline/progreso.
-   - Mostrar participantes.
-   - Mostrar monto, tasa, moneda.
-   - Acciones demo:
-     Subir comprobante.
-     Liberar fondos.
-     Cancelar.
-     Abrir disputa.
+PARTE DEL INTEGRANTE 4
+----------------------
+Archivos:
+1. presentation/transactions/TransactionsScreen.kt
+2. data/repository/FirebaseTransactionRepository.kt
+3. data/image/ImageCompressor.kt
+4. data/repository/FirebaseAttachmentRepository.kt
+5. presentation/disputes/DisputesScreen.kt
+6. data/repository/FirebaseDisputeRepository.kt
+7. presentation/notifications/NotificationsScreen.kt
+8. data/repository/FirebaseNotificationRepository.kt
+9. presentation/feedback/FeedbackScreen.kt y FirebaseFeedbackRepository.kt
+10. FirebaseRatingRepository.kt
 
-3. DisputesScreen.kt:
-   - Formulario para crear disputa.
-   - Selector de transaccion.
-   - Motivo.
-   - Descripcion.
-   - Evidencias demo.
-   - Advertencia o nota antes de crear.
-   - Lista de disputas ya creadas.
-
-4. ProfileScreen.kt:
-   - Avatar o card de usuario.
-   - Nombre completo.
-   - Correo.
-   - Documento.
-   - Telefono editable.
-   - Reputacion.
-   - Botones Guardar y Cancelar.
-   - Preparado para foto de perfil despues.
-
-5. NotificationsScreen.kt:
-   - Lista de notificaciones.
-   - Marcar como leida al tocar.
-   - Badge o etiqueta Nuevo.
-   - Diferenciar notificaciones leidas/no leidas.
-
-Comandos sugeridos
+MAQUINA DE ESTADOS
 ------------------
-git checkout -b feature/pantallas-usuario
-git add app/src/main/java/com/exchangepro/moviles/presentation/home/HomeScreen.kt
-git add app/src/main/java/com/exchangepro/moviles/presentation/transactions/TransactionsScreen.kt
-git add app/src/main/java/com/exchangepro/moviles/presentation/disputes/DisputesScreen.kt
-git add app/src/main/java/com/exchangepro/moviles/presentation/profile/ProfileScreen.kt
-git add app/src/main/java/com/exchangepro/moviles/presentation/notifications/NotificationsScreen.kt
-git commit -m "Implement user dashboard transactions disputes profile and notifications"
+PENDIENTE_PAGO -> PAGADO -> COMPLETADO
+PENDIENTE_PAGO -> CANCELADO
+PENDIENTE_PAGO o PAGADO -> EN_DISPUTA -> COMPLETADO/CANCELADO por ADMIN
+WALLET_INTERNA -> COMPLETADO directamente despues de validar e intercambiar ambos saldos
 
-Notas para el equipo
---------------------
-Este commit puede usar datos demo. La prioridad es que el flujo visual quede completo.
-Firebase se conectara despues, cuando auth y roles ya esten listos.
+TransactionsScreen calcula:
+- isBuyer/isSeller.
+- canConfirmPayment: usuario que debe entregar la contraprestacion.
+- canReleaseFunds: propietario del saldo retenido.
+Esto evita mostrar la misma accion a ambas partes.
+
+COMPROBANTE
+-----------
+1. ActivityResultContracts.GetContent abre selector del sistema con image/*.
+2. ImageCompressor decodifica respetando orientacion, reduce dimensiones y calidad.
+3. Repite compresion hasta <= 500 KB y produce CompressedImage.
+4. uploadVoucher valida fundsRecipientId y PENDIENTE_PAGO.
+5. En una transaccion crea attachments/{id}, guarda Blob JPEG y actualiza voucherAttachmentId,
+   status PAGADO y paidAt.
+6. Tambien notifica a fundsOwner para revisar.
+7. getImage recupera bytes; TransactionsScreen decodifica Bitmap para vista previa.
+
+POR QUE FIRESTORE Y NO STORAGE
+------------------------------
+Para el prototipo universitario se evito Cloud Storage con facturacion. Firestore limita cada
+documento a 1 MiB, por eso se comprime a 500 KB y se guarda separado. Produccion debe usar
+almacenamiento especializado.
+
+COMPLETAR/CANCELAR
+------------------
+- complete solo lo ejecuta fundsOwner cuando status PAGADO.
+- El receptor se acredita con FieldValue.increment, sin leer su balance privado.
+- Resta heldAmount de retained del dueño y suma available del receptor.
+- Crea dos movimientos, marca COMPLETADO y notifica.
+- cancel solo antes del pago; devuelve monto/retencion a la oferta y marca CANCELADO.
+- Todas son transacciones atomicas.
+
+DISPUTAS
+--------
+1. DisputesScreen lista operaciones elegibles.
+2. Usuario escribe motivo/descripcion y opcionalmente evidencia.
+3. FirebaseDisputeRepository.create valida participante/estado.
+4. Crea disputes/{id}, cambia transaccion a EN_DISPUTA y notifica a contraparte.
+5. Evidencia usa uploadDisputeEvidence y arrayUnion de attachmentId.
+6. El usuario no resuelve; lo hace ADMIN.
+
+CALIFICACIONES
+--------------
+- Solo para COMPLETADO.
+- Documento id transactionId_raterId evita duplicados.
+- hasRated revisa existencia; submit valida score 1..5 y participante.
+- Guarda ratedUserId y comentario. No se modifica libremente la reputacion de otro usuario
+  desde el cliente por seguridad.
+
+NOTIFICACIONES Y FEEDBACK
+-------------------------
+- FirebaseNotificationRepository consulta por userId y marca read/readAt.
+- Operaciones principales crean avisos dentro de sus transacciones.
+- FeedbackScreen crea RECOMENDACION o REPORTE_ERROR y lista respuestas del admin.
+
+HOME Y PERFIL
+-------------
+- HomeScreen consulta perfil, wallet, ofertas y transacciones para un resumen.
+- ProfileScreen usa FirebaseUserRepository y FirebaseAttachmentRepository para editar datos
+  permitidos y foto comprimida.
+
+DEMOSTRACION SUGERIDA
+---------------------
+1. Usuario B toma oferta; mostrar PENDIENTE_PAGO.
+2. Subir captura; mostrar attachment y estado PAGADO.
+3. Usuario A visualiza y libera; verificar balances/movimientos.
+4. Calificar. En otra operacion abrir disputa y adjuntar evidencia.
+5. Mostrar notificaciones de ambos usuarios.
+
+IDEA CENTRAL PARA EXPLICAR
+--------------------------
+Los estados controlan que accion es legal. Las transacciones Firestore impiden que saldo,
+movimiento y estado queden desincronizados; las imagenes son adjuntos referenciados.

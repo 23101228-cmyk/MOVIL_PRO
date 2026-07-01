@@ -236,10 +236,11 @@ private fun WalletHero(
         balance.currency == CurrencyCode.PEN || rates.any { it.code == balance.currency }
     }
     val totalInPen = wallet.balances.sumOf { balance ->
+        val ownedAmount = balance.available + balance.retained
         if (balance.currency == CurrencyCode.PEN) {
-            balance.available
+            ownedAmount
         } else {
-            balance.available * (rates.firstOrNull { it.code == balance.currency }?.buy ?: 0.0)
+            ownedAmount * (rates.firstOrNull { it.code == balance.currency }?.buy ?: 0.0)
         }
     }
 

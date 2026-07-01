@@ -25,6 +25,10 @@ class FirebaseAttachmentRepository(
     private fun currentUserId(): String =
         authProvider().currentUser?.uid ?: error("No hay una sesion activa.")
 
+    /**
+     * Guarda el comprobante como Blob separado, enlaza su id a la transaccion,
+     * cambia el estado a PAGADO y genera una notificacion de revision.
+     */
     suspend fun uploadVoucher(transactionId: String, image: CompressedImage): String {
         val db = dbProvider()
         val uid = currentUserId()
@@ -100,6 +104,9 @@ class FirebaseAttachmentRepository(
         return attachmentRef.id
     }
 
+    /**
+     * Adjunta evidencia a una disputa sin incrustar los bytes en el documento principal.
+     */
     suspend fun uploadDisputeEvidence(disputeId: String, image: CompressedImage): String {
         val db = dbProvider()
         val uid = currentUserId()

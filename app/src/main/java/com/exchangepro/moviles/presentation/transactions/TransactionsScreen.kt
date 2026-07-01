@@ -88,7 +88,7 @@ fun TransactionsScreen() {
     var voucherPreview by remember { mutableStateOf<ByteArray?>(null) }
     var loadingPreview by remember { mutableStateOf(false) }
     var ratingTarget by remember { mutableStateOf<Transaction?>(null) }
-
+//Obtiene las transacciones del usuario con:
     suspend fun reloadTransactions() {
         transactions = repository.getMyTransactions()
     }
@@ -140,7 +140,7 @@ fun TransactionsScreen() {
             loading = false
         }
     }
-
+    //Lista de operaciones
     LazyColumn(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
             Text("Mis operaciones", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
@@ -281,6 +281,7 @@ fun TransactionsScreen() {
 }
 
 @Composable
+//Representa una transaccion dentro de la lista
 private fun TransactionCard(trx: Transaction, onClick: () -> Unit) {
     ExchangeCard(modifier = Modifier.clickable(onClick = onClick)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -310,6 +311,7 @@ private fun TransactionDetailDialog(
     onDispute: () -> Unit,
     onRate: () -> Unit
 ) {
+    //identificacion del usuario
     val isBuyer = trx.buyerId == currentUserId
     val isSeller = trx.sellerId == currentUserId
     val canConfirmPayment = trx.fundsRecipientId == currentUserId

@@ -52,6 +52,10 @@ class FirebaseWalletRepository(
             .take(limit.toInt())
     }
 
+    /**
+     * Simula una recarga academica de forma atomica: incrementa el balance y crea
+     * tanto el registro topUp como su movimiento de auditoria.
+     */
     suspend fun topUp(request: TopUpRequest) {
         val db = dbProvider()
         val uid = userId()
@@ -112,6 +116,10 @@ class FirebaseWalletRepository(
         }.await()
     }
 
+    /**
+     * Descuenta saldo disponible y registra retiro/movimiento en una sola transaccion.
+     * El destino debe existir previamente en paymentData/{uid}.
+     */
     suspend fun withdraw(request: WithdrawalRequest) {
         require(request.amount > 0.0) { "El monto debe ser mayor a 0." }
         val db = dbProvider()
