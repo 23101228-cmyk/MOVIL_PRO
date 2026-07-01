@@ -1,10 +1,13 @@
 package com.exchangepro.moviles.presentation.auth
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.ui.res.painterResource
+import com.exchangepro.moviles.R
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -357,15 +360,13 @@ private fun BrandHeader(title: String, subtitle: String) {
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
+        Image(
+            painter = painterResource(id = R.drawable.app_logo),
+            contentDescription = "ExchangePro Logo",
             modifier = Modifier
                 .size(44.dp)
                 .clip(RoundedCornerShape(10.dp))
-                .background(ExchangePrimary),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(Icons.Default.CurrencyExchange, contentDescription = null, tint = Color.White)
-        }
+        )
         Spacer(Modifier.width(10.dp))
         Text("ExchangePro", color = ExchangePrimary, style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
     }
