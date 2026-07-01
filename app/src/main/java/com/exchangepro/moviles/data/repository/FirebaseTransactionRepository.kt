@@ -498,20 +498,62 @@ class FirebaseTransactionRepository(
             val offer = transaction.get(offerRef)
             require(offer.exists()) { "No se encontro la oferta original." }
 
-            val restoredAmount = (offer.getDouble("offeredAmount") ?: 0.0) +
-                (record.getDouble("operationAmount") ?: 0.0)
-            val restoredHeld = (offer.getDouble("heldAmount") ?: 0.0) +
-                (record.getDouble("heldAmount") ?: 0.0)
+            val offerStatus = offer.getString("status")
+            val heldCurrency = record.getString("heldCurrency").orEmpty()
+            val heldAmount = record.getDouble("heldAmount") ?: 0.0
+            val ownerId = record.getString("fundsOwnerId").orEmpty()
 
-            transaction.update(
-                offerRef,
-                mapOf(
-                    "offeredAmount" to restoredAmount,
-                    "heldAmount" to restoredHeld,
-                    "status" to OfferStatus.ACTIVA.name,
-                    "updatedAt" to FieldValue.serverTimestamp()
+            if (offerStatus == OfferStatus.CANCELADA.name) {
+                val ownerBalanceRef = db.collection(FirebaseCollections.WALLETS)
+                    .document(ownerId)
+                    .collection(FirebaseCollections.BALANCES)
+                    .document(heldCurrency)
+                val ownerBalance = transaction.get(ownerBalanceRef)
+                val available = ownerBalance.getDouble("available") ?: 0.0
+                val retained = ownerBalance.getDouble("retained") ?: 0.0
+
+                transaction.set(
+                    ownerBalanceRef,
+                    mapOf(
+                        "currency" to heldCurrency,
+                        "available" to available + heldAmount,
+                        "retained" to (retained - heldAmount).coerceAtLeast(0.0),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ),
+                    SetOptions.merge()
                 )
-            )
+
+                val movementRef = db.collection(FirebaseCollections.WALLET_MOVEMENTS).document()
+                transaction.set(
+                    movementRef,
+                    mapOf(
+                        "userId" to ownerId,
+                        "currency" to heldCurrency,
+                        "amount" to heldAmount,
+                        "operationType" to "DEVOLUCION_CANCELACION",
+                        "result" to "EXITOSO",
+                        "referenceType" to "TRANSACTION",
+                        "referenceId" to transactionId,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            } else {
+                val restoredAmount = (offer.getDouble("offeredAmount") ?: 0.0) +
+                    (record.getDouble("operationAmount") ?: 0.0)
+                val restoredHeld = (offer.getDouble("heldAmount") ?: 0.0) +
+                    (record.getDouble("heldAmount") ?: 0.0)
+
+                transaction.update(
+                    offerRef,
+                    mapOf(
+                        "offeredAmount" to restoredAmount,
+                        "heldAmount" to restoredHeld,
+                        "status" to OfferStatus.ACTIVA.name,
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    )
+                )
+            }
+
             transaction.update(
                 transactionRef,
                 mapOf(
