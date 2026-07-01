@@ -34,7 +34,8 @@ class FirebaseAttachmentRepository(
         val uid = currentUserId()
         val transactionRef = db.collection(FirebaseCollections.TRANSACTIONS).document(transactionId)
         val attachmentRef = db.collection(FirebaseCollections.ATTACHMENTS).document()
-        val notificationRef = db.collection(FirebaseCollections.NOTIFICATIONS).document()
+        val ownerNotificationRef = db.collection(FirebaseCollections.NOTIFICATIONS).document()
+        val payerNotificationRef = db.collection(FirebaseCollections.NOTIFICATIONS).document()
 
         db.runTransaction { transaction ->
             val record = transaction.get(transactionRef)
@@ -64,11 +65,21 @@ class FirebaseAttachmentRepository(
                 )
             )
             transaction.set(
-                notificationRef,
+                ownerNotificationRef,
                 mapOf(
                     "userId" to record.getString("fundsOwnerId").orEmpty(),
-                    "title" to "Comprobante recibido",
-                    "message" to "Revisa el comprobante de ${record.getString("code").orEmpty()}.",
+                    "title" to "Pago registrado",
+                    "message" to "La operacion ${record.getString("code").orEmpty()} esta PAGADA. Revisa el comprobante y libera los fondos.",
+                    "read" to false,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+            )
+            transaction.set(
+                payerNotificationRef,
+                mapOf(
+                    "userId" to uid,
+                    "title" to "Pago registrado",
+                    "message" to "Tu comprobante de ${record.getString("code").orEmpty()} fue registrado. Espera la liberacion de los fondos.",
                     "read" to false,
                     "createdAt" to FieldValue.serverTimestamp()
                 )

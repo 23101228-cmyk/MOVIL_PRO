@@ -13,6 +13,9 @@ import com.google.firebase.firestore.DocumentSnapshot
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
@@ -24,7 +27,50 @@ class FirebaseOfferRepository(
     fun currentUserId(): String =
         authProvider().currentUser?.uid ?: error("No hay una sesion activa.")
 
+    fun observeActiveOffers(): Flow<List<Offer>> = callbackFlow {
+        val uid = currentUserId()
+        val registration = dbProvider()
+            .collection(FirebaseCollections.OFFERS)
+            .whereEqualTo("status", OfferStatus.ACTIVA.name)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                trySend(
+                    snapshot?.documents
+                        .orEmpty()
+                        .sortedByDescending { it.createdAtMillis() }
+                        .mapNotNull { it.toOffer() }
+                        .filter { it.userId != uid }
+                )
+            }
+        awaitClose { registration.remove() }
+    }
+
+    fun observeMyActiveOffers(): Flow<List<Offer>> = callbackFlow {
+        val uid = currentUserId()
+        val registration = dbProvider()
+            .collection(FirebaseCollections.OFFERS)
+            .whereEqualTo("userId", uid)
+            .addSnapshotListener { snapshot, error ->
+                if (error != null) {
+                    close(error)
+                    return@addSnapshotListener
+                }
+                trySend(
+                    snapshot?.documents
+                        .orEmpty()
+                        .sortedByDescending { it.createdAtMillis() }
+                        .mapNotNull { it.toOffer() }
+                        .filter { it.status == OfferStatus.ACTIVA }
+                )
+            }
+        awaitClose { registration.remove() }
+    }
+
     suspend fun getActiveOffers(): List<Offer> {
+        val uid = currentUserId()
         val snapshot = dbProvider()
             .collection(FirebaseCollections.OFFERS)
             .whereEqualTo("status", OfferStatus.ACTIVA.name)
@@ -34,6 +80,7 @@ class FirebaseOfferRepository(
         return snapshot.documents
             .sortedByDescending { it.createdAtMillis() }
             .mapNotNull { it.toOffer() }
+            .filter { it.userId != uid }
     }
 
     suspend fun getMyActiveOffers(): List<Offer> {
@@ -74,14 +121,40 @@ class FirebaseOfferRepository(
         val walletRef = db.collection(FirebaseCollections.WALLETS).document(uid)
         val balanceRef = walletRef.collection(FirebaseCollections.BALANCES).document(holdCurrency.name)
         val userRef = db.collection(FirebaseCollections.USERS).document(uid)
+        val paymentDataRef = db.collection(FirebaseCollections.PAYMENT_DATA).document(uid)
         val offerRef = db.collection(FirebaseCollections.OFFERS).document()
 
         db.runTransaction { transaction ->
             val balance = transaction.get(balanceRef)
             val user = transaction.get(userRef)
+            val paymentData = transaction.get(paymentDataRef)
             val available = balance.getDouble("available") ?: 0.0
             val retained = balance.getDouble("retained") ?: 0.0
             val userName = user.getString("fullName").orEmpty()
+            val yape = paymentData.getString("yape").orEmpty()
+            val plin = paymentData.getString("plin").orEmpty()
+            val bankName = paymentData.getString("bankName").orEmpty()
+            val accountNumber = paymentData.getString("accountNumber").orEmpty()
+            val cci = paymentData.getString("cci").orEmpty()
+            val paymentMethodDetails = buildMap {
+                put("Wallet Interna", "Saldo interno ExchangePro")
+                if (yape.isNotBlank()) put("Yape", yape)
+                if (plin.isNotBlank()) put("Plin", plin)
+                if (bankName.isNotBlank() && accountNumber.isNotBlank()) {
+                    put(
+                        "Transferencia Bancaria",
+                        buildString {
+                            append(bankName)
+                            append(" - Cuenta ")
+                            append(accountNumber)
+                            if (cci.isNotBlank()) {
+                                append(" / CCI ")
+                                append(cci)
+                            }
+                        }
+                    )
+                }
+            }
 
             require(available >= requiredAmount) {
                 "Fondos insuficientes en ${holdCurrency.name}. Necesitas %.2f y tienes %.2f.".format(requiredAmount, available)
@@ -117,7 +190,8 @@ class FirebaseOfferRepository(
                     "exchangeRate" to request.exchangeRate,
                     "offeredAmount" to request.offeredAmount,
                     "minimumAmount" to request.minimumAmount,
-                    "paymentMethods" to listOf("WALLET_INTERNA"),
+                    "paymentMethods" to paymentMethodDetails.keys.toList(),
+                    "paymentMethodDetails" to paymentMethodDetails,
                     "status" to "ACTIVA",
                     "heldCurrency" to holdCurrency.name,
                     "heldAmount" to requiredAmount,
@@ -190,6 +264,14 @@ class FirebaseOfferRepository(
             minimumAmount = getDouble("minimumAmount") ?: return null,
             paymentMethods = (get("paymentMethods") as? List<*>)
                 ?.mapNotNull { it as? String }
+                .orEmpty(),
+            paymentMethodDetails = (get("paymentMethodDetails") as? Map<*, *>)
+                ?.mapNotNull { (key, value) ->
+                    val method = key as? String
+                    val detail = value as? String
+                    if (method != null && detail != null) method to detail else null
+                }
+                ?.toMap()
                 .orEmpty(),
             status = status
         )

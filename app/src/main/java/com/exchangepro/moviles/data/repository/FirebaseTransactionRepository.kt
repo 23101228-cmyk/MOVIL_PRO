@@ -70,6 +70,23 @@ class FirebaseTransactionRepository(
             val availableAmount = offer.getDouble("offeredAmount") ?: 0.0
             val minimumAmount = offer.getDouble("minimumAmount") ?: 0.0
             val offerHeldAmount = offer.getDouble("heldAmount") ?: 0.0
+            val offeredPaymentMethods = (offer.get("paymentMethods") as? List<*>)
+                ?.mapNotNull { it as? String }
+                .orEmpty()
+            val paymentMethodDetails = (offer.get("paymentMethodDetails") as? Map<*, *>)
+                .orEmpty()
+            val normalizedPaymentMethod = paymentMethodLabel(paymentMethod)
+            require(
+                normalizedPaymentMethod == "Wallet Interna" ||
+                    offeredPaymentMethods.any { paymentMethodLabel(it) == normalizedPaymentMethod }
+            ) {
+                "El metodo de pago seleccionado ya no esta disponible."
+            }
+            val paymentDetail = paymentMethodDetails.entries
+                .firstOrNull { paymentMethodLabel(it.key.toString()) == normalizedPaymentMethod }
+                ?.value
+                ?.toString()
+                .orEmpty()
             val heldCurrency = offer.enumValue<CurrencyCode>("heldCurrency")
                 ?: throw IllegalStateException("La oferta no tiene una moneda retenida valida.")
 
@@ -83,7 +100,12 @@ class FirebaseTransactionRepository(
             } else {
                 amount
             }
-            val isInternalWallet = paymentMethod.contains("Wallet", ignoreCase = true)
+            val isInternalWallet = normalizedPaymentMethod == "Wallet Interna"
+            if (!isInternalWallet) {
+                require(paymentDetail.isNotBlank()) {
+                    "La oferta no contiene los datos del metodo de pago seleccionado."
+                }
+            }
             val counterCurrency = if (operationType == OperationType.COMPRA) {
                 fromCurrency
             } else {
@@ -132,9 +154,6 @@ class FirebaseTransactionRepository(
             }
 
             val remainingAmount = (availableAmount - amount).coerceAtLeast(0.0)
-            require(remainingAmount <= 0.0001 || remainingAmount >= minimumAmount) {
-                "El monto dejaria un remanente menor al minimo. Toma la oferta completa o reduce el monto."
-            }
             val remainingHeld = (offerHeldAmount - transactionHeldAmount).coerceAtLeast(0.0)
             val code = "EX-${Calendar.getInstance().get(Calendar.YEAR)}-${transactionRef.id.take(6).uppercase()}"
             val fundsRecipientId = if (ownerId == buyerId) sellerId else buyerId
@@ -147,7 +166,8 @@ class FirebaseTransactionRepository(
                 buyerName = buyerName,
                 sellerId = sellerId,
                 sellerName = sellerName,
-                paymentMethod = paymentMethod,
+                paymentMethod = normalizedPaymentMethod,
+                paymentDetail = paymentDetail,
                 operationAmount = amount,
                 totalToPay = amount * exchangeRate,
                 currency = fromCurrency,
@@ -166,9 +186,12 @@ class FirebaseTransactionRepository(
             firestoreTransaction.update(
                 offerRef,
                 mapOf(
-                    "offeredAmount" to remainingAmount,
-                    "heldAmount" to remainingHeld,
-                    "status" to if (remainingAmount <= 0.0001) OfferStatus.COMPLETADA.name else OfferStatus.ACTIVA.name,
+                    "offeredAmount" to 0.0,
+                    "heldAmount" to 0.0,
+                    "status" to OfferStatus.COMPLETADA.name,
+                    "takenAmount" to amount,
+                    "unusedAmount" to remainingAmount,
+                    "completedAt" to FieldValue.serverTimestamp(),
                     "updatedAt" to FieldValue.serverTimestamp()
                 )
             )
@@ -182,7 +205,8 @@ class FirebaseTransactionRepository(
                     "buyerName" to buyerName,
                     "sellerId" to sellerId,
                     "sellerName" to sellerName,
-                    "paymentMethod" to paymentMethod,
+                    "paymentMethod" to normalizedPaymentMethod,
+                    "paymentDetail" to paymentDetail,
                     "operationAmount" to amount,
                     "totalToPay" to amount * exchangeRate,
                     "fromCurrency" to fromCurrency.name,
@@ -197,6 +221,7 @@ class FirebaseTransactionRepository(
                     "fundsRecipientId" to fundsRecipientId,
                     "heldCurrency" to heldCurrency.name,
                     "heldAmount" to transactionHeldAmount,
+                    "offerMinimumAmount" to minimumAmount,
                     "completedAt" to if (isInternalWallet) FieldValue.serverTimestamp() else null,
                     "createdAt" to FieldValue.serverTimestamp()
                 )
@@ -220,7 +245,8 @@ class FirebaseTransactionRepository(
                     ownerHeldBalanceRef,
                     mapOf(
                         "currency" to heldCurrency.name,
-                        "retained" to FieldValue.increment(-transactionHeldAmount),
+                        "available" to FieldValue.increment(remainingHeld),
+                        "retained" to FieldValue.increment(-offerHeldAmount),
                         "updatedAt" to FieldValue.serverTimestamp()
                     ),
                     SetOptions.merge()
@@ -269,6 +295,21 @@ class FirebaseTransactionRepository(
                     internalMovementRefs[3],
                     walletMovementData(ownerId, counterCurrency, counterAmount, transactionRef.id)
                 )
+            } else if (remainingHeld > 0.0001) {
+                val ownerHeldBalanceRef = db.collection(FirebaseCollections.WALLETS)
+                    .document(ownerId)
+                    .collection(FirebaseCollections.BALANCES)
+                    .document(heldCurrency.name)
+                firestoreTransaction.set(
+                    ownerHeldBalanceRef,
+                    mapOf(
+                        "currency" to heldCurrency.name,
+                        "available" to FieldValue.increment(remainingHeld),
+                        "retained" to FieldValue.increment(-remainingHeld),
+                        "updatedAt" to FieldValue.serverTimestamp()
+                    ),
+                    SetOptions.merge()
+                )
             }
             firestoreTransaction.set(
                 ownerNotificationRef,
@@ -278,20 +319,22 @@ class FirebaseTransactionRepository(
                     message = if (isInternalWallet) {
                         "La operacion $code se completo con Wallet Interna."
                     } else {
-                        "Tu oferta genero la operacion $code."
+                        "La operacion $code fue iniciada. Espera que la contraparte registre el pago."
                     }
                 )
             )
-            if (isInternalWallet) {
-                firestoreTransaction.set(
-                    takerNotificationRef,
-                    notificationData(
-                        userId = takerId,
-                        title = "Intercambio completado",
-                        message = "La operacion $code se completo con Wallet Interna."
-                    )
+            firestoreTransaction.set(
+                takerNotificationRef,
+                notificationData(
+                    userId = takerId,
+                    title = if (isInternalWallet) "Intercambio completado" else "Operacion iniciada",
+                    message = if (isInternalWallet) {
+                        "La operacion $code se completo con Wallet Interna."
+                    } else {
+                        "La operacion $code fue iniciada. Realiza el pago y adjunta el comprobante."
+                    }
                 )
-            }
+            )
             null
         }.awaitTransaction()
 
@@ -381,6 +424,7 @@ class FirebaseTransactionRepository(
         val ownerMovementRef = db.collection(FirebaseCollections.WALLET_MOVEMENTS).document()
         val recipientMovementRef = db.collection(FirebaseCollections.WALLET_MOVEMENTS).document()
         val recipientNotificationRef = db.collection(FirebaseCollections.NOTIFICATIONS).document()
+        val ownerNotificationRef = db.collection(FirebaseCollections.NOTIFICATIONS).document()
 
         db.runTransaction { transaction ->
             val record = transaction.get(transactionRef)
@@ -466,8 +510,16 @@ class FirebaseTransactionRepository(
                 recipientNotificationRef,
                 notificationData(
                     userId = recipientId,
-                    title = "Fondos recibidos",
-                    message = "La operacion ${record.getString("code").orEmpty()} fue completada."
+                    title = "Operacion completada",
+                    message = "Recibiste los fondos de la operacion ${record.getString("code").orEmpty()}."
+                )
+            )
+            transaction.set(
+                ownerNotificationRef,
+                notificationData(
+                    userId = ownerId,
+                    title = "Operacion completada",
+                    message = "Liberaste los fondos de la operacion ${record.getString("code").orEmpty()}."
                 )
             )
             null
@@ -475,13 +527,15 @@ class FirebaseTransactionRepository(
     }
 
     /**
-     * Cancela antes del pago y restaura a la oferta el monto y respaldo retenido.
+     * Cancela antes del pago, devuelve toda retencion pendiente y mantiene cerrada
+     * la oferta original para que no vuelva a aparecer en el mercado.
      */
     suspend fun cancel(transactionId: String) {
         val db = dbProvider()
         val uid = currentUserId()
         val transactionRef = db.collection(FirebaseCollections.TRANSACTIONS).document(transactionId)
         val cancellationNotificationRef = db.collection(FirebaseCollections.NOTIFICATIONS).document()
+        val requesterNotificationRef = db.collection(FirebaseCollections.NOTIFICATIONS).document()
 
         db.runTransaction { transaction ->
             val record = transaction.get(transactionRef)
@@ -498,61 +552,56 @@ class FirebaseTransactionRepository(
             val offer = transaction.get(offerRef)
             require(offer.exists()) { "No se encontro la oferta original." }
 
-            val offerStatus = offer.getString("status")
             val heldCurrency = record.getString("heldCurrency").orEmpty()
             val heldAmount = record.getDouble("heldAmount") ?: 0.0
+            val unusedHeldAmount = offer.getDouble("heldAmount") ?: 0.0
+            val refundAmount = heldAmount + unusedHeldAmount
             val ownerId = record.getString("fundsOwnerId").orEmpty()
-
-            if (offerStatus == OfferStatus.CANCELADA.name) {
-                val ownerBalanceRef = db.collection(FirebaseCollections.WALLETS)
-                    .document(ownerId)
-                    .collection(FirebaseCollections.BALANCES)
-                    .document(heldCurrency)
-                val ownerBalance = transaction.get(ownerBalanceRef)
-                val available = ownerBalance.getDouble("available") ?: 0.0
-                val retained = ownerBalance.getDouble("retained") ?: 0.0
-
-                transaction.set(
-                    ownerBalanceRef,
-                    mapOf(
-                        "currency" to heldCurrency,
-                        "available" to available + heldAmount,
-                        "retained" to (retained - heldAmount).coerceAtLeast(0.0),
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    ),
-                    SetOptions.merge()
-                )
-
-                val movementRef = db.collection(FirebaseCollections.WALLET_MOVEMENTS).document()
-                transaction.set(
-                    movementRef,
-                    mapOf(
-                        "userId" to ownerId,
-                        "currency" to heldCurrency,
-                        "amount" to heldAmount,
-                        "operationType" to "DEVOLUCION_CANCELACION",
-                        "result" to "EXITOSO",
-                        "referenceType" to "TRANSACTION",
-                        "referenceId" to transactionId,
-                        "createdAt" to FieldValue.serverTimestamp()
-                    )
-                )
-            } else {
-                val restoredAmount = (offer.getDouble("offeredAmount") ?: 0.0) +
-                    (record.getDouble("operationAmount") ?: 0.0)
-                val restoredHeld = (offer.getDouble("heldAmount") ?: 0.0) +
-                    (record.getDouble("heldAmount") ?: 0.0)
-
-                transaction.update(
-                    offerRef,
-                    mapOf(
-                        "offeredAmount" to restoredAmount,
-                        "heldAmount" to restoredHeld,
-                        "status" to OfferStatus.ACTIVA.name,
-                        "updatedAt" to FieldValue.serverTimestamp()
-                    )
-                )
+            val ownerBalanceRef = db.collection(FirebaseCollections.WALLETS)
+                .document(ownerId)
+                .collection(FirebaseCollections.BALANCES)
+                .document(heldCurrency)
+            val ownerBalance = transaction.get(ownerBalanceRef)
+            val available = ownerBalance.getDouble("available") ?: 0.0
+            val retained = ownerBalance.getDouble("retained") ?: 0.0
+            require(retained + 0.0001 >= refundAmount) {
+                "El saldo retenido es insuficiente para cancelar la transaccion."
             }
+
+            transaction.set(
+                ownerBalanceRef,
+                mapOf(
+                    "currency" to heldCurrency,
+                    "available" to available + refundAmount,
+                    "retained" to (retained - refundAmount).coerceAtLeast(0.0),
+                    "updatedAt" to FieldValue.serverTimestamp()
+                ),
+                SetOptions.merge()
+            )
+            transaction.update(
+                offerRef,
+                mapOf(
+                    "offeredAmount" to 0.0,
+                    "heldAmount" to 0.0,
+                    "status" to OfferStatus.COMPLETADA.name,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+
+            val movementRef = db.collection(FirebaseCollections.WALLET_MOVEMENTS).document()
+            transaction.set(
+                movementRef,
+                mapOf(
+                    "userId" to ownerId,
+                    "currency" to heldCurrency,
+                    "amount" to refundAmount,
+                    "operationType" to "DEVOLUCION_CANCELACION",
+                    "result" to "EXITOSO",
+                    "referenceType" to "TRANSACTION",
+                    "referenceId" to transactionId,
+                    "createdAt" to FieldValue.serverTimestamp()
+                )
+            )
 
             transaction.update(
                 transactionRef,
@@ -572,6 +621,14 @@ class FirebaseTransactionRepository(
                     userId = counterpartId,
                     title = "Transaccion cancelada",
                     message = "La operacion ${record.getString("code").orEmpty()} fue cancelada."
+                )
+            )
+            transaction.set(
+                requesterNotificationRef,
+                notificationData(
+                    userId = uid,
+                    title = "Transaccion cancelada",
+                    message = "Cancelaste la operacion ${record.getString("code").orEmpty()}."
                 )
             )
             null
@@ -615,6 +672,7 @@ class FirebaseTransactionRepository(
             sellerId = getString("sellerId").orEmpty(),
             sellerName = getString("sellerName").orEmpty(),
             paymentMethod = getString("paymentMethod").orEmpty(),
+            paymentDetail = getString("paymentDetail").orEmpty(),
             operationAmount = getDouble("operationAmount") ?: return null,
             totalToPay = getDouble("totalToPay") ?: return null,
             currency = fromCurrency,
@@ -634,6 +692,16 @@ class FirebaseTransactionRepository(
 
     private fun DocumentSnapshot.createdAtMillis(): Long =
         (get("createdAt") as? Timestamp)?.toDate()?.time ?: 0L
+}
+
+private fun paymentMethodLabel(value: String): String = when (
+    value.trim().uppercase().replace(' ', '_')
+) {
+    "YAPE" -> "Yape"
+    "PLIN" -> "Plin"
+    "BANK", "TRANSFERENCIA_BANCARIA" -> "Transferencia Bancaria"
+    "WALLET_INTERNA" -> "Wallet Interna"
+    else -> value.trim()
 }
 
 private fun notificationData(userId: String, title: String, message: String): Map<String, Any> =

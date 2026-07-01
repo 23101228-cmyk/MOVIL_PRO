@@ -357,6 +357,9 @@ private fun TransactionDetailDialog(
                         DetailRow("Monto operacion", "%.2f ${trx.currency}".format(trx.operationAmount))
                         DetailRow("Total a pagar", "%.2f ${trx.toCurrency}".format(trx.totalToPay))
                         DetailRow("Metodo", trx.paymentMethod)
+                        if (trx.paymentDetail.isNotBlank()) {
+                            DetailRow("Destino de pago", trx.paymentDetail)
+                        }
                         DetailRow("Oferta", "#${trx.offerId}")
                     }
                 }

@@ -74,6 +74,7 @@ import com.exchangepro.moviles.ui.theme.ExchangePositive
 import com.exchangepro.moviles.ui.theme.ExchangePrimary
 import com.exchangepro.moviles.ui.theme.ExchangePrimaryLight
 import com.exchangepro.moviles.ui.theme.ExchangeSurface
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 import kotlin.math.round
 
@@ -97,14 +98,22 @@ fun OffersScreen(navController: NavController) {
     }
 
     LaunchedEffect(Unit) {
-        try {
-            reloadOffers()
-        } catch (error: Exception) {
-            actionFailed = true
-            actionMessage = error.message ?: "No se pudieron cargar las ofertas."
-        } finally {
-            loading = false
-        }
+        offerRepository.observeActiveOffers()
+            .catch { error ->
+                actionFailed = true
+                actionMessage = error.message ?: "No se pudieron cargar las ofertas."
+                loading = false
+            }
+            .collect { updatedOffers ->
+                offers = updatedOffers
+                selectedOffer = selectedOffer?.let { selected ->
+                    updatedOffers.firstOrNull { it.id == selected.id }
+                }
+                takingOffer = takingOffer?.let { selected ->
+                    updatedOffers.firstOrNull { it.id == selected.id }
+                }
+                loading = false
+            }
     }
 
     LazyColumn(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -221,14 +230,19 @@ fun MyOffersScreen(navController: NavController) {
     }
 
     LaunchedEffect(Unit) {
-        try {
-            reloadOffers()
-        } catch (error: Exception) {
-            actionFailed = true
-            actionMessage = error.message ?: "No se pudieron cargar tus ofertas."
-        } finally {
-            loading = false
-        }
+        offerRepository.observeMyActiveOffers()
+            .catch { error ->
+                actionFailed = true
+                actionMessage = error.message ?: "No se pudieron cargar tus ofertas."
+                loading = false
+            }
+            .collect { updatedOffers ->
+                myOffers = updatedOffers
+                selectedOffer = selectedOffer?.let { selected ->
+                    updatedOffers.firstOrNull { it.id == selected.id }
+                }
+                loading = false
+            }
     }
 
     LazyColumn(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -610,7 +624,8 @@ private fun AmountField(
     value: String,
     onValueChange: (String) -> Unit,
     hint: String? = null,
-    showRequired: Boolean = false
+    showRequired: Boolean = false,
+    errorMessage: String = "Requerido"
 ) {
     Column {
         Text(label, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.labelLarge)
@@ -624,7 +639,7 @@ private fun AmountField(
             isError = showRequired
         )
         if (showRequired) {
-            Text("Requerido", color = ExchangeNegative, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 12.dp, top = 3.dp))
+            Text(errorMessage, color = ExchangeNegative, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 12.dp, top = 3.dp))
         }
         hint?.let {
             Text(it, color = ExchangeMuted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(start = 2.dp, top = 4.dp))
@@ -772,6 +787,13 @@ private fun TakeOfferDialog(
     val methods = remember(offer) { paymentMethodsForOffer(offer) }
     val amountValue = amount.toDoubleOrNull()
     val converted = (amountValue ?: 0.0) * offer.exchangeRate
+    val amountError = when {
+        amountValue == null || amountValue <= 0.0 -> "Ingresa un monto."
+        amountValue < offer.minimumAmount || amountValue > offer.offeredAmount ->
+            "El monto debe estar entre %.2f y %.2f %s."
+                .format(offer.minimumAmount, offer.offeredAmount, offer.fromCurrency)
+        else -> null
+    }
     AlertDialog(
         onDismissRequest = onDismiss,
         confirmButton = {},
@@ -821,7 +843,8 @@ private fun TakeOfferDialog(
                         },
                         value = amount,
                         onValueChange = { amount = it },
-                        showRequired = submitted && !isValidOfferAmount(amountValue, offer)
+                        showRequired = submitted && amountError != null,
+                        errorMessage = amountError.orEmpty()
                     )
 
                     if (amountValue != null && amountValue > 0.0) {
@@ -972,31 +995,26 @@ private fun actionLabel(offer: Offer): String =
 private fun isValidOfferAmount(amount: Double?, offer: Offer): Boolean =
     amount != null &&
         amount >= offer.minimumAmount &&
-        amount <= offer.offeredAmount &&
-        ((offer.offeredAmount - amount) <= 0.0001 || (offer.offeredAmount - amount) >= offer.minimumAmount)
+        amount <= offer.offeredAmount
 
 private fun paymentMethodsForOffer(offer: Offer): List<PaymentMethodOption> {
-    val rawLabels = if (offer.paymentMethods.isEmpty()) {
-        listOf("Yape", "Plin", "Transferencia Bancaria", "Wallet Interna")
-    } else {
-        offer.paymentMethods + "Wallet Interna"
-    }
+    val rawLabels = offer.paymentMethods + "Wallet Interna"
     val labels = rawLabels
         .map(::paymentMethodLabel)
         .distinctBy { it.lowercase() }
 
-    return labels.mapIndexed { index, method ->
-        PaymentMethodOption(
-            id = index + 1,
-            label = method,
-            detail = when {
-                method.contains("Yape", ignoreCase = true) -> "999 888 777"
-                method.contains("Plin", ignoreCase = true) -> "999 888 777"
-                method.contains("BCP", ignoreCase = true) -> "BCP 193-1234567-0-00"
-                method.contains("Interbank", ignoreCase = true) -> "Interbank 898-1234567890"
-                method.contains("Wallet", ignoreCase = true) -> "Saldo interno ExchangePro"
-                else -> "Cuenta registrada del vendedor"
+    return labels.mapNotNull { method ->
+        val detail = offer.paymentMethodDetails.entries
+            .firstOrNull { paymentMethodLabel(it.key) == method }
+            ?.value
+            .orEmpty()
+            .ifBlank {
+                if (method == "Wallet Interna") "Saldo interno ExchangePro" else return@mapNotNull null
             }
+        PaymentMethodOption(
+            id = method.hashCode(),
+            label = method,
+            detail = detail
         )
     }
 }

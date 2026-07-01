@@ -83,6 +83,7 @@ data class Offer(
     val offeredAmount: Double,
     val minimumAmount: Double,
     val paymentMethods: List<String>,
+    val paymentMethodDetails: Map<String, String> = emptyMap(),
     val status: OfferStatus
 )
 
@@ -95,6 +96,7 @@ data class Transaction(
     val sellerId: String,
     val sellerName: String,
     val paymentMethod: String,
+    val paymentDetail: String = "",
     val operationAmount: Double,
     val totalToPay: Double,
     val currency: CurrencyCode,

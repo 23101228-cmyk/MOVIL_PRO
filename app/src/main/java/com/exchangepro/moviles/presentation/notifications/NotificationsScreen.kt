@@ -40,6 +40,7 @@ import com.exchangepro.moviles.ui.theme.ExchangeElevated
 import com.exchangepro.moviles.ui.theme.ExchangeMuted
 import com.exchangepro.moviles.ui.theme.ExchangePrimary
 import com.exchangepro.moviles.ui.theme.ExchangePrimaryLight
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.launch
 
 @Composable
@@ -51,10 +52,16 @@ fun NotificationsScreen() {
     var errorMessage by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(Unit) {
-        runCatching { repository.getMine() }
-            .onSuccess { notifications = it }
-            .onFailure { errorMessage = it.message ?: "No se pudieron cargar las notificaciones." }
-        loading = false
+        repository.observeMine()
+            .catch { error ->
+                errorMessage = error.message ?: "No se pudieron cargar las notificaciones."
+                loading = false
+            }
+            .collect {
+                notifications = it
+                loading = false
+                errorMessage = null
+            }
     }
 
     LazyColumn(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

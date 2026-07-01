@@ -66,7 +66,8 @@ class FirebasePaymentDataRepository(
             "Debes proporcionar al menos un metodo de pago."
         }
         val uid = currentUserId()
-        dbProvider()
+        val db = dbProvider()
+        db
             .collection(FirebaseCollections.PAYMENT_DATA)
             .document(uid)
             .set(
@@ -81,14 +82,71 @@ class FirebasePaymentDataRepository(
                 )
             )
             .awaitPayment()
+        syncActiveOffers(db, uid, data)
     }
 
     suspend fun delete() {
-        dbProvider()
+        val db = dbProvider()
+        val uid = currentUserId()
+        db
             .collection(FirebaseCollections.PAYMENT_DATA)
-            .document(currentUserId())
+            .document(uid)
             .delete()
             .awaitPayment()
+        syncActiveOffers(db, uid, UserPaymentData())
+    }
+
+    /**
+     * Mantiene las ofertas ya publicadas alineadas con los destinos configurados
+     * por su propietario, sin obligarlo a cancelarlas y crearlas nuevamente.
+     */
+    private suspend fun syncActiveOffers(
+        db: FirebaseFirestore,
+        uid: String,
+        data: UserPaymentData
+    ) {
+        val details = paymentMethodDetails(data)
+        val activeOffers = db.collection(FirebaseCollections.OFFERS)
+            .whereEqualTo("userId", uid)
+            .get()
+            .awaitPayment()
+            .documents
+            .filter { it.getString("status") == "ACTIVA" }
+
+        if (activeOffers.isEmpty()) return
+
+        val batch = db.batch()
+        activeOffers.forEach { offer ->
+            batch.update(
+                offer.reference,
+                mapOf(
+                    "paymentMethods" to details.keys.toList(),
+                    "paymentMethodDetails" to details,
+                    "updatedAt" to FieldValue.serverTimestamp()
+                )
+            )
+        }
+        batch.commit().awaitPayment()
+    }
+}
+
+private fun paymentMethodDetails(data: UserPaymentData): Map<String, String> = buildMap {
+    put("Wallet Interna", "Saldo interno ExchangePro")
+    if (data.yape.isNotBlank()) put("Yape", data.yape)
+    if (data.plin.isNotBlank()) put("Plin", data.plin)
+    if (data.bankName.isNotBlank() && data.accountNumber.isNotBlank()) {
+        put(
+            "Transferencia Bancaria",
+            buildString {
+                append(data.bankName)
+                append(" - Cuenta ")
+                append(data.accountNumber)
+                if (data.cci.isNotBlank()) {
+                    append(" / CCI ")
+                    append(data.cci)
+                }
+            }
+        )
     }
 }
 
