@@ -87,6 +87,8 @@ fun TransactionsScreen(navController: NavController) {
     var actionFailed by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var uploadingVoucher by remember { mutableStateOf(false) }
+    var actionSaving by remember { mutableStateOf(false) }
+    var ratingSaving by remember { mutableStateOf(false) }
     var voucherPreview by remember { mutableStateOf<ByteArray?>(null) }
     var loadingPreview by remember { mutableStateOf(false) }
     var ratingTarget by remember { mutableStateOf<Transaction?>(null) }
@@ -96,7 +98,9 @@ fun TransactionsScreen(navController: NavController) {
     }
 
     fun performAction(successMessage: String, action: suspend () -> Unit) {
+        if (actionSaving) return
         scope.launch {
+            actionSaving = true
             try {
                 action()
                 reloadTransactions()
@@ -106,6 +110,8 @@ fun TransactionsScreen(navController: NavController) {
             } catch (error: Exception) {
                 actionFailed = true
                 message = error.message ?: "No se pudo actualizar la transaccion."
+            } finally {
+                actionSaving = false
             }
         }
     }
@@ -178,6 +184,7 @@ fun TransactionsScreen(navController: NavController) {
             trx = trx,
             currentUserId = currentUserId,
             uploadingVoucher = uploadingVoucher,
+            actionSaving = actionSaving,
             onDismiss = { selected = null },
             onUploadVoucher = {
                 if (!uploadingVoucher) {
@@ -215,7 +222,9 @@ fun TransactionsScreen(navController: NavController) {
                 navController.navigate(Route.Disputes.value)
             },
             onRate = {
+                if (actionSaving) return@TransactionDetailDialog
                 scope.launch {
+                    actionSaving = true
                     try {
                         if (ratingRepository.hasRated(trx.id)) {
                             actionFailed = true
@@ -228,6 +237,8 @@ fun TransactionsScreen(navController: NavController) {
                     } catch (error: Exception) {
                         actionFailed = true
                         message = error.message ?: "No se pudo verificar la calificacion."
+                    } finally {
+                        actionSaving = false
                     }
                 }
             }
@@ -237,9 +248,12 @@ fun TransactionsScreen(navController: NavController) {
     ratingTarget?.let { trx ->
         RatingDialog(
             transactionCode = trx.code,
+            saving = ratingSaving,
             onDismiss = { ratingTarget = null },
             onSubmit = { score, comment ->
+                if (ratingSaving) return@RatingDialog
                 scope.launch {
+                    ratingSaving = true
                     try {
                         ratingRepository.submit(trx.id, score, comment)
                         actionFailed = false
@@ -248,6 +262,8 @@ fun TransactionsScreen(navController: NavController) {
                     } catch (error: Exception) {
                         actionFailed = true
                         message = error.message ?: "No se pudo guardar la calificacion."
+                    } finally {
+                        ratingSaving = false
                     }
                 }
             }
@@ -304,6 +320,7 @@ private fun TransactionDetailDialog(
     trx: Transaction,
     currentUserId: String,
     uploadingVoucher: Boolean,
+    actionSaving: Boolean,
     onDismiss: () -> Unit,
     onUploadVoucher: () -> Unit,
     onViewVoucher: () -> Unit,
@@ -319,7 +336,7 @@ private fun TransactionDetailDialog(
     val canReleaseFunds = trx.fundsOwnerId == currentUserId
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!actionSaving && !uploadingVoucher) onDismiss() },
         confirmButton = {},
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -340,7 +357,7 @@ private fun TransactionDetailDialog(
                             Text("Transaccion #${trx.id}", color = ExchangeMuted)
                         }
                         StatusPill(statusLabel(trx.status))
-                        IconButton(onClick = onDismiss) {
+                        IconButton(onClick = onDismiss, enabled = !actionSaving && !uploadingVoucher) {
                             Icon(Icons.Default.Close, contentDescription = "Cerrar")
                         }
                     }
@@ -422,38 +439,46 @@ private fun TransactionDetailDialog(
                                 PrimaryAction(
                                     if (uploadingVoucher) "Comprimiendo imagen..." else "Seleccionar comprobante",
                                     onUploadVoucher,
-                                    Modifier.fillMaxWidth()
+                                    Modifier.fillMaxWidth(),
+                                    enabled = !uploadingVoucher && !actionSaving
                                 )
                             }
                             if (canReleaseFunds && trx.status == TransactionStatus.PAGADO) {
                                 Button(
                                     onClick = onRelease,
                                     modifier = Modifier.fillMaxWidth(),
+                                    enabled = !actionSaving,
                                     colors = ButtonDefaults.buttonColors(containerColor = ExchangePositive),
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
                                     Icon(Icons.Default.CheckCircle, contentDescription = null)
                                     Spacer(Modifier.width(8.dp))
-                                    Text("Liberar Fondos")
+                                    Text(if (actionSaving) "Procesando..." else "Liberar Fondos")
                                 }
                             }
                             if (trx.status == TransactionStatus.PENDIENTE_PAGO || trx.status == TransactionStatus.PAGADO) {
-                                SecondaryAction("Abrir disputa", onDispute, Modifier.fillMaxWidth())
+                                SecondaryAction("Abrir disputa", onDispute, Modifier.fillMaxWidth(), enabled = !actionSaving)
                             }
                             if (trx.status == TransactionStatus.PENDIENTE_PAGO) {
                                 Button(
                                     onClick = onCancel,
                                     modifier = Modifier.fillMaxWidth(),
+                                    enabled = !actionSaving,
                                     colors = ButtonDefaults.buttonColors(containerColor = ExchangeNegative),
                                     shape = RoundedCornerShape(8.dp)
                                 ) {
                                     Icon(Icons.Default.Cancel, contentDescription = null)
                                     Spacer(Modifier.width(8.dp))
-                                    Text("Cancelar")
+                                    Text(if (actionSaving) "Procesando..." else "Cancelar")
                                 }
                             }
                             if (trx.status == TransactionStatus.COMPLETADO) {
-                                PrimaryAction("Calificar usuario", onRate, Modifier.fillMaxWidth())
+                                PrimaryAction(
+                                    if (actionSaving) "Verificando..." else "Calificar usuario",
+                                    onRate,
+                                    Modifier.fillMaxWidth(),
+                                    enabled = !actionSaving
+                                )
                             }
                             if (trx.status == TransactionStatus.EN_DISPUTA) {
                                 Text("La transaccion esta en disputa.", color = ExchangeMuted)
@@ -471,6 +496,7 @@ private fun TransactionDetailDialog(
 @Composable
 private fun RatingDialog(
     transactionCode: String,
+    saving: Boolean,
     onDismiss: () -> Unit,
     onSubmit: (Int, String) -> Unit
 ) {
@@ -478,7 +504,7 @@ private fun RatingDialog(
     var comment by remember { mutableStateOf("") }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         title = { Text("Calificar $transactionCode") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -507,10 +533,17 @@ private fun RatingDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = { onSubmit(score, comment) }) { Text("Enviar") }
+            TextButton(
+                enabled = !saving,
+                onClick = {
+                    if (!saving) onSubmit(score, comment)
+                }
+            ) {
+                Text(if (saving) "Enviando..." else "Enviar")
+            }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) { Text("Cancelar") }
+            TextButton(onClick = onDismiss, enabled = !saving) { Text("Cancelar") }
         },
         containerColor = ExchangeSurface
     )

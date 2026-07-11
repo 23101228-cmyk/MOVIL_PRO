@@ -27,13 +27,43 @@ service cloud.firestore {
          data.sellerId == request.auth.uid);
     }
 
+    function transactionDoc(transactionId) {
+      return get(/databases/$(database)/documents/transactions/$(transactionId)).data;
+    }
+
+    function canCreateRating() {
+      let tx = transactionDoc(request.resource.data.transactionId);
+      return signedIn() &&
+        request.resource.data.raterId == request.auth.uid &&
+        request.resource.data.score is int &&
+        request.resource.data.score >= 1 &&
+        request.resource.data.score <= 5 &&
+        tx.status == "COMPLETADO" &&
+        (tx.buyerId == request.auth.uid || tx.sellerId == request.auth.uid) &&
+        (
+          (tx.buyerId == request.auth.uid && request.resource.data.ratedUserId == tx.sellerId) ||
+          (tx.sellerId == request.auth.uid && request.resource.data.ratedUserId == tx.buyerId)
+        );
+    }
+
+    function canUpdateRatingAggregate() {
+      return signedIn() &&
+        request.resource.data.diff(resource.data).affectedKeys()
+          .hasOnly(["reputation", "totalRatings"]) &&
+        request.resource.data.reputation is number &&
+        request.resource.data.reputation >= 1 &&
+        request.resource.data.reputation <= 5 &&
+        request.resource.data.totalRatings == resource.data.totalRatings + 1;
+    }
+
     match /users/{userId} {
       allow create: if isOwner(userId) && request.resource.data.role == "USER";
-      allow read: if isOwner(userId) || isAdmin();
+      allow read: if signedIn();
       allow update: if isAdmin() ||
         (isOwner(userId) &&
          request.resource.data.diff(resource.data).affectedKeys()
-           .hasOnly(["names", "lastNames", "fullName", "phone", "documentNumber", "photoAttachmentId"]));
+           .hasOnly(["names", "lastNames", "fullName", "phone", "documentNumber", "photoAttachmentId"])) ||
+        canUpdateRatingAggregate();
       allow delete: if false;
     }
 
@@ -79,7 +109,7 @@ service cloud.firestore {
 
     match /ratings/{ratingId} {
       allow read: if signedIn();
-      allow create: if signedIn() && request.resource.data.raterId == request.auth.uid;
+      allow create: if canCreateRating();
       allow update, delete: if false;
     }
 

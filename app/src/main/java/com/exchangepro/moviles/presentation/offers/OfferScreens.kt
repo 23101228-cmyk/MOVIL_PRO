@@ -89,6 +89,7 @@ fun OffersScreen(navController: NavController) {
     var takingOffer by remember { mutableStateOf<Offer?>(null) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
     var actionFailed by remember { mutableStateOf(false) }
+    var offerActionSaving by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var showSuccessDialog by remember { mutableStateOf(false) }
     var successData by remember { mutableStateOf(Pair("", "")) }
@@ -151,10 +152,13 @@ fun OffersScreen(navController: NavController) {
         OfferDetailDialog(
             offer = offer,
             isMine = offer.userId == currentUserId,
+            saving = offerActionSaving,
             onDismiss = { selectedOffer = null },
             onAction = {
+                if (offerActionSaving) return@OfferDetailDialog
                 if (offer.userId == currentUserId) {
                     scope.launch {
+                        offerActionSaving = true
                         try {
                             offerRepository.cancelOffer(offer.id)
                             reloadOffers()
@@ -164,6 +168,8 @@ fun OffersScreen(navController: NavController) {
                         } catch (error: Exception) {
                             actionFailed = true
                             actionMessage = error.message ?: "No se pudo cancelar la oferta."
+                        } finally {
+                            offerActionSaving = false
                         }
                     }
                 } else {
@@ -221,6 +227,7 @@ fun MyOffersScreen(navController: NavController) {
     var selectedOffer by remember { mutableStateOf<Offer?>(null) }
     var actionMessage by remember { mutableStateOf<String?>(null) }
     var actionFailed by remember { mutableStateOf(false) }
+    var offerActionSaving by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(true) }
     var showSuccessDialog by remember { mutableStateOf(false) }
     var successData by remember { mutableStateOf(Pair("", "")) }
@@ -289,9 +296,12 @@ fun MyOffersScreen(navController: NavController) {
         OfferDetailDialog(
             offer = offer,
             isMine = true,
+            saving = offerActionSaving,
             onDismiss = { selectedOffer = null },
             onAction = {
+                if (offerActionSaving) return@OfferDetailDialog
                 scope.launch {
+                    offerActionSaving = true
                     try {
                         offerRepository.cancelOffer(offer.id)
                         reloadOffers()
@@ -301,6 +311,8 @@ fun MyOffersScreen(navController: NavController) {
                     } catch (error: Exception) {
                         actionFailed = true
                         actionMessage = error.message ?: "No se pudo cancelar la oferta."
+                    } finally {
+                        offerActionSaving = false
                     }
                 }
                 selectedOffer = null
@@ -473,6 +485,7 @@ fun CreateOfferScreen(navController: NavController) {
                     Spacer(Modifier.width(10.dp))
                     Button(
                         onClick = {
+                            if (saving) return@Button
                             submitted = true
                             val offered = offeredAmount.toDoubleOrNull()
                             val minimum = minimumAmount.toDoubleOrNull()
@@ -690,11 +703,12 @@ private fun OfferCard(offer: Offer, onClick: () -> Unit) {
 private fun OfferDetailDialog(
     offer: Offer,
     isMine: Boolean,
+    saving: Boolean,
     onDismiss: () -> Unit,
     onAction: () -> Unit
 ) {
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         confirmButton = {},
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -713,7 +727,7 @@ private fun OfferDetailDialog(
                         Text("Detalle de Oferta", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
                         Text(offer.userName, color = ExchangeMuted)
                     }
-                    IconButton(onClick = onDismiss) {
+                    IconButton(onClick = onDismiss, enabled = !saving) {
                         Icon(Icons.Default.Close, contentDescription = "Cerrar")
                     }
                 }
@@ -742,21 +756,22 @@ private fun OfferDetailDialog(
                         style = MaterialTheme.typography.bodySmall
                     )
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = onDismiss) { Text("Cerrar") }
+                        TextButton(onClick = onDismiss, enabled = !saving) { Text("Cerrar") }
                         Spacer(Modifier.width(8.dp))
                         Button(
                             onClick = onAction,
+                            enabled = !saving,
                             colors = ButtonDefaults.buttonColors(containerColor = ExchangeNegative),
                             shape = RoundedCornerShape(8.dp)
                         ) {
-                            Text("Cancelar oferta")
+                            Text(if (saving) "Procesando..." else "Cancelar oferta")
                         }
                     }
                 } else {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = onDismiss) { Text("Cancelar") }
+                        TextButton(onClick = onDismiss, enabled = !saving) { Text("Cancelar") }
                         Spacer(Modifier.width(8.dp))
-                        PrimaryAction(actionLabel(offer), onAction)
+                        PrimaryAction(if (saving) "Procesando..." else actionLabel(offer), onAction, enabled = !saving)
                     }
                 }
             }
@@ -795,7 +810,7 @@ private fun TakeOfferDialog(
         else -> null
     }
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         confirmButton = {},
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -824,7 +839,7 @@ private fun TakeOfferDialog(
                         )
                         Text("${offer.fromCurrency} por ${offer.toCurrency}", color = ExchangeMuted)
                     }
-                    IconButton(onClick = onDismiss) {
+                    IconButton(onClick = onDismiss, enabled = !saving) {
                         Icon(Icons.Default.Close, contentDescription = "Cerrar")
                     }
                 }
@@ -901,9 +916,9 @@ private fun TakeOfferDialog(
                     }
 
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = onDismiss) { Text("Cancelar") }
+                        TextButton(onClick = onDismiss, enabled = !saving) { Text("Cancelar") }
                         Spacer(Modifier.width(8.dp))
-                        PrimaryAction("Confirmar Operacion", {
+                        PrimaryAction(if (saving) "Procesando..." else "Confirmar Operacion", {
                             submitted = true
                             if (!saving && isValidOfferAmount(amountValue, offer) && selectedMethod != null) {
                                 saving = true
@@ -923,7 +938,7 @@ private fun TakeOfferDialog(
                                     )
                                 }
                             }
-                        })
+                        }, enabled = !saving)
                     }
                     createError?.let {
                         Text(it, color = ExchangeNegative, style = MaterialTheme.typography.bodySmall)

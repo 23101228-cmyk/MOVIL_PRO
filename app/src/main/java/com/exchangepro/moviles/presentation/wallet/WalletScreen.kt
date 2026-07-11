@@ -105,6 +105,8 @@ fun WalletScreen() {
     var message by remember { mutableStateOf<String?>(null) }
     var showTopUp by remember { mutableStateOf(false) }
     var showWithdraw by remember { mutableStateOf(false) }
+    var topUpSaving by remember { mutableStateOf(false) }
+    var withdrawSaving by remember { mutableStateOf(false) }
     var showSuccessDialog by remember { mutableStateOf(false) }
     var successData by remember { mutableStateOf(Pair("", "")) }
 
@@ -191,9 +193,12 @@ fun WalletScreen() {
     if (showTopUp) {
         TopUpDialog(
             wallet = wallet,
+            saving = topUpSaving,
             onDismiss = { showTopUp = false },
             onConfirm = { request ->
+                if (topUpSaving) return@TopUpDialog
                 scope.launch {
+                    topUpSaving = true
                     try {
                         walletRepository.topUp(request)
                         showTopUp = false
@@ -202,6 +207,8 @@ fun WalletScreen() {
                         refresh()
                     } catch (error: Exception) {
                         message = "No se pudo guardar en Firebase: ${error.message.orEmpty()}"
+                    } finally {
+                        topUpSaving = false
                     }
                 }
             }
@@ -212,9 +219,12 @@ fun WalletScreen() {
         WithdrawDialog(
             wallet = wallet,
             destinations = paymentDestinations,
+            saving = withdrawSaving,
             onDismiss = { showWithdraw = false },
             onConfirm = { request ->
+                if (withdrawSaving) return@WithdrawDialog
                 scope.launch {
+                    withdrawSaving = true
                     try {
                         walletRepository.withdraw(request)
                         showWithdraw = false
@@ -223,6 +233,8 @@ fun WalletScreen() {
                         refresh()
                     } catch (error: Exception) {
                         message = error.message ?: "No se pudo completar el retiro."
+                    } finally {
+                        withdrawSaving = false
                     }
                 }
             }
@@ -402,6 +414,7 @@ private fun MovementRow(movement: WalletMovement) {
 @Composable
 private fun TopUpDialog(
     wallet: Wallet,
+    saving: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (TopUpRequest) -> Unit
 ) {
@@ -415,7 +428,7 @@ private fun TopUpDialog(
     val accounts = remember { exchangeProAccounts() }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         confirmButton = {},
         text = {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -442,7 +455,7 @@ private fun TopUpDialog(
                             Text("Recargar Saldo", color = Color.White, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
                             Text("Elige un metodo y deposita en la cuenta de ExchangePro", color = Color.White.copy(alpha = 0.76f), style = MaterialTheme.typography.bodySmall)
                         }
-                        IconButton(onClick = onDismiss) {
+                        IconButton(onClick = onDismiss, enabled = !saving) {
                             Icon(Icons.Default.Close, contentDescription = "Cerrar", tint = Color.White)
                         }
                     }
@@ -532,9 +545,10 @@ private fun TopUpDialog(
 
                 item {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                        TextButton(onClick = onDismiss) { Text("Cancelar") }
+                        TextButton(onClick = onDismiss, enabled = !saving) { Text("Cancelar") }
                         Spacer(Modifier.width(8.dp))
-                        PrimaryAction("Confirmar Recarga", {
+                        PrimaryAction(if (saving) "Procesando..." else "Confirmar Recarga", {
+                            if (saving) return@PrimaryAction
                             val parsedAmount = amount.toDoubleOrNull()
                             when {
                                 currency == null -> error = "Selecciona una moneda."
@@ -550,7 +564,7 @@ private fun TopUpDialog(
                                     )
                                 )
                             }
-                        })
+                        }, enabled = !saving)
                     }
                 }
             }
@@ -564,6 +578,7 @@ private fun TopUpDialog(
 private fun WithdrawDialog(
     wallet: Wallet,
     destinations: List<PaymentDestination>,
+    saving: Boolean,
     onDismiss: () -> Unit,
     onConfirm: (WithdrawalRequest) -> Unit
 ) {
@@ -576,7 +591,7 @@ private fun WithdrawDialog(
     val selectedBalance = wallet.balances.firstOrNull { it.currency == currency }
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         confirmButton = {},
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -587,7 +602,7 @@ private fun WithdrawDialog(
                         Text("Retirar Saldo", fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleLarge)
                         Text("Envia fondos a un metodo registrado", color = ExchangeMuted)
                     }
-                    IconButton(onClick = onDismiss) {
+                    IconButton(onClick = onDismiss, enabled = !saving) {
                         Icon(Icons.Default.Close, contentDescription = "Cerrar")
                     }
                 }
@@ -677,9 +692,10 @@ private fun WithdrawDialog(
                 error?.let { Text(it, color = ExchangeNegative, style = MaterialTheme.typography.bodySmall) }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text("Cancelar") }
+                    TextButton(onClick = onDismiss, enabled = !saving) { Text("Cancelar") }
                     Spacer(Modifier.width(8.dp))
-                    PrimaryAction("Confirmar Retiro", {
+                    PrimaryAction(if (saving) "Procesando..." else "Confirmar Retiro", {
+                        if (saving) return@PrimaryAction
                         val parsedAmount = amount.toDoubleOrNull()
                         when {
                             currency == null -> error = "Selecciona una moneda."
@@ -694,7 +710,7 @@ private fun WithdrawDialog(
                                 )
                             )
                         }
-                    })
+                    }, enabled = !saving)
                 }
             }
         },

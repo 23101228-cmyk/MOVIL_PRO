@@ -126,10 +126,16 @@ fun StatCard(
 }
 
 @Composable
-fun PrimaryAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun PrimaryAction(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
+) {
     Button(
         onClick = onClick,
         modifier = modifier,
+        enabled = enabled,
         shape = RoundedCornerShape(8.dp),
         colors = ButtonDefaults.buttonColors(containerColor = ExchangePrimary)
     ) {
@@ -138,10 +144,16 @@ fun PrimaryAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifi
 }
 
 @Composable
-fun SecondaryAction(text: String, onClick: () -> Unit, modifier: Modifier = Modifier) {
+fun SecondaryAction(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true
+) {
     OutlinedButton(
         onClick = onClick,
         modifier = modifier,
+        enabled = enabled,
         shape = RoundedCornerShape(8.dp),
         border = BorderStroke(1.dp, ExchangePrimaryLight)
     ) {

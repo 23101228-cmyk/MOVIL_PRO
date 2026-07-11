@@ -16,7 +16,13 @@ data class AdminDashboardData(
     val users: Int = 0,
     val activeOffers: Int = 0,
     val completedTransactions: Int = 0,
-    val pendingDisputes: Int = 0
+    val pendingDisputes: Int = 0,
+    val resolvedDisputes: Int = 0,
+    val pendingFeedback: Int = 0,
+    val externalPaymentTransactions: Int = 0,
+    val internalWalletTransactions: Int = 0,
+    val transactionsByStatus: Map<String, Int> = emptyMap(),
+    val volumeByCurrency: Map<String, Double> = emptyMap()
 )
 
 data class AdminDisputeRecord(
@@ -75,11 +81,30 @@ class FirebaseAdminRepository(
         val offers = db.collection(FirebaseCollections.OFFERS).get().awaitAdmin()
         val transactions = db.collection(FirebaseCollections.TRANSACTIONS).get().awaitAdmin()
         val disputes = db.collection(FirebaseCollections.DISPUTES).get().awaitAdmin()
+        val feedback = db.collection(FirebaseCollections.FEEDBACK).get().awaitAdmin()
+        val transactionDocs = transactions.documents
+        val transactionsByStatus = transactionDocs
+            .groupingBy { it.getString("status").orEmpty().ifBlank { "SIN_ESTADO" } }
+            .eachCount()
+        val volumeByCurrency = transactionDocs
+            .groupBy { it.getString("heldCurrency") ?: it.getString("fromCurrency") ?: "N/A" }
+            .mapValues { entry ->
+                entry.value.sumOf { it.getDouble("heldAmount") ?: it.getDouble("operationAmount") ?: 0.0 }
+            }
         return AdminDashboardData(
             users = users.size(),
             activeOffers = offers.count { it.getString("status") == "ACTIVA" },
-            completedTransactions = transactions.count { it.getString("status") == TransactionStatus.COMPLETADO.name },
-            pendingDisputes = disputes.count { it.getString("status") == "PENDIENTE" }
+            completedTransactions = transactionDocs.count { it.getString("status") == TransactionStatus.COMPLETADO.name },
+            pendingDisputes = disputes.count { it.getString("status") == "PENDIENTE" },
+            resolvedDisputes = disputes.count { it.getString("status") == "RESUELTA" },
+            pendingFeedback = feedback.count { it.getString("status") == "PENDIENTE" },
+            externalPaymentTransactions = transactionDocs.count {
+                val method = it.getString("paymentMethod").orEmpty()
+                method.isNotBlank() && method != "Wallet Interna"
+            },
+            internalWalletTransactions = transactionDocs.count { it.getString("paymentMethod") == "Wallet Interna" },
+            transactionsByStatus = transactionsByStatus,
+            volumeByCurrency = volumeByCurrency
         )
     }
 

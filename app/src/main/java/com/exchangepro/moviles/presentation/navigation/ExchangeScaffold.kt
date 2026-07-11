@@ -119,10 +119,10 @@ fun ExchangeScaffold(
             containerColor = ExchangeBg,
             topBar = {
                 TopAppBar(
-                    title = { Text(title) },
+                    title = { Text(if (isAdmin) "🛡 $title" else title) },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
-                            Icon(if (isAdmin) Icons.Default.Security else Icons.Default.Menu, contentDescription = "Menu")
+                            Icon(Icons.Default.Menu, contentDescription = "Menu")
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(containerColor = ExchangeBg)
